@@ -85,3 +85,13 @@ def test_body_allows_full_history_but_others_stay_limited(client):
     long = {"start": "2015-01-01", "end": "2026-11-25"}
     assert client.get("/api/v1/body", params=long, headers=h).status_code == 200
     assert client.get("/api/v1/steps", params=long, headers=h).status_code == 422
+
+
+def test_trends_resting_hr_monthly(client):
+    from shc import queries
+    from datetime import date
+    store = client.app.state.store
+    store.upsert([{"type": "resting_heart_rate", "id": f"r{d}", "start": f"2026-10-{d:02d}T07:00:00-04:00",
+                   "zone_offset": "-04:00", "data": {"bpm": 50 + d % 4}} for d in range(1, 11)], "test")
+    t = queries.trends(store, "resting_hr", "month", date(2015, 1, 1), date(2026, 11, 25))
+    assert t["rows"][0]["period"] == "2026-10" and t["rows"][0]["days"] == 10

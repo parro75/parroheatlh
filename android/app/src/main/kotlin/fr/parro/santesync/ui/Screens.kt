@@ -142,7 +142,7 @@ fun Screen(content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) { content() }
 }
 
-private val DAY_OPTIONS = listOf("14" to "14 jours", "30" to "30 jours", "90" to "90 jours", "365" to "1 an")
+private val DAY_OPTIONS = listOf("14" to "14 jours", "30" to "30 jours", "90" to "90 jours", "365" to "1 an", "all" to "Tout")
 
 // ---- Accueil ---------------------------------------------------------------------------------------
 
@@ -281,9 +281,10 @@ fun SleepBars(sleep: JSONObject, days: Int) {
 fun SleepScreen(refresh: Int, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     var days by rememberSaveable { mutableStateOf("30") }
-    val state by rememberLoad(refresh, days) { Api.get(ctx, "sleep", range(days.toInt())) }
+    val state by rememberLoad(refresh, days) { Api.get(ctx, "sleep", range(days.toIntOrNull() ?: 14)) }
     Screen {
         Choices(DAY_OPTIONS, days) { days = it }
+        if (days == "all") AllTime(refresh, onLogin, SLEEP_ALL) else
         Loaded(state, onLogin) { sleep ->
             val n = days.toInt()
             Section("Durée et phases") {
@@ -320,11 +321,12 @@ fun HeartScreen(refresh: Int, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     var days by rememberSaveable { mutableStateOf("30") }
     val state by rememberLoad(refresh, days) {
-        val r = range(days.toInt())
+        val r = range(days.toIntOrNull() ?: 14)
         HeartData(Api.get(ctx, "heart_rate", r), Api.get(ctx, "recovery", r), Api.get(ctx, "hrv", r), Api.get(ctx, "stress", r))
     }
     Screen {
         Choices(DAY_OPTIONS, days) { days = it }
+        if (days == "all") AllTime(refresh, onLogin, HEART_ALL) else
         Loaded(state, onLogin) { d ->
             val dates = allDays(days.toInt())
             val labels = dates.map(::shortDate)
@@ -367,11 +369,12 @@ fun ActivityScreen(refresh: Int, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     var days by rememberSaveable { mutableStateOf("30") }
     val state by rememberLoad(refresh, days) {
-        val r = range(days.toInt())
+        val r = range(days.toIntOrNull() ?: 14)
         Api.get(ctx, "steps", r) to Api.get(ctx, "workouts", r)
     }
     Screen {
         Choices(DAY_OPTIONS, days) { days = it }
+        if (days == "all") AllTime(refresh, onLogin, ACTIVITY_ALL) else
         Loaded(state, onLogin) { (steps, workouts) ->
             Section("Pas") {
                 StepsBars(steps, days.toInt())

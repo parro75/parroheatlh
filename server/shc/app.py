@@ -131,7 +131,7 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     @mcp.tool(annotations=READ_ONLY)
     def get_trends(
         metric: Annotated[str, Field(description="steps, sleep_minutes, sleep_score, hrv_nightly, hrv, "
-                                                 "sleeping_hr, heart_rate_avg, weight, body_fat, stress, "
+                                                 "sleeping_hr, resting_hr, heart_rate_avg, weight, body_fat, stress, "
                                                  "energy ou workout_minutes")],
         period: Annotated[str, Field(description="week, month ou year")] = "month",
         start: DateArg = None,

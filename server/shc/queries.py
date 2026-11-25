@@ -329,6 +329,8 @@ def _daily_values(store: Store, metric: str, start: date, end: date) -> dict[str
         return {**per_day("energy_score", "sleeping_hr"), **per_day("vitals_daily", "sleeping_hr")}
     if metric == "heart_rate_avg":
         return per_day("heart_rate_daily", "avg")
+    if metric == "resting_hr":
+        return per_day("resting_heart_rate", "bpm")
     if metric == "weight":
         return per_day("weight", "kg")
     if metric == "body_fat":
@@ -346,7 +348,7 @@ def _daily_values(store: Store, metric: str, start: date, end: date) -> dict[str
     raise QueryError(f"métrique inconnue : {metric}")
 
 
-TREND_METRICS = ("steps", "sleep_minutes", "sleep_score", "hrv_nightly", "hrv", "sleeping_hr",
+TREND_METRICS = ("steps", "sleep_minutes", "sleep_score", "hrv_nightly", "hrv", "sleeping_hr", "resting_hr",
                  "heart_rate_avg", "weight", "body_fat", "stress", "energy", "workout_minutes")
 
 
