@@ -12,6 +12,8 @@ import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
+import androidx.health.connect.client.changes.DeletionChange
+import androidx.health.connect.client.changes.UpsertionChange
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
@@ -20,6 +22,7 @@ import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.request.ChangesTokenRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import org.json.JSONArray
@@ -55,6 +58,12 @@ class HealthReader(private val client: HealthConnectClient) {
             DistanceRecord::class,
             TotalCaloriesBurnedRecord::class,
             ActiveCaloriesBurnedRecord::class,
+        )
+
+        /** Types lus enregistrement par enregistrement (les pas et la FC passent par des agrégats). */
+        val RAW_TYPES: List<KClass<out Record>> = listOf(
+            RestingHeartRateRecord::class, HeartRateVariabilityRmssdRecord::class, WeightRecord::class,
+            BodyFatRecord::class, OxygenSaturationRecord::class, SleepSessionRecord::class, ExerciseSessionRecord::class,
         )
 
         val READ_PERMISSIONS: Set<String> = RECORD_TYPES.map { HealthPermission.getReadPermission(it) }.toSet()
@@ -137,58 +146,100 @@ class HealthReader(private val client: HealthConnectClient) {
 
         dailyAggregates(from, to).forEach(::add)
 
-        if (has(RestingHeartRateRecord::class)) readAll(RestingHeartRateRecord::class, from, to).forEach { r ->
-            val off = offsetAt(r.time, r.zoneOffset)
-            add(record("resting_heart_rate", r.metadata.id, r.time, null, off,
-                JSONObject().put("bpm", r.beatsPerMinute).put("source", r.metadata.dataOrigin.packageName)))
-        }
-        if (has(HeartRateVariabilityRmssdRecord::class)) readAll(HeartRateVariabilityRmssdRecord::class, from, to).forEach { r ->
-            val off = offsetAt(r.time, r.zoneOffset)
-            add(record("hrv_rmssd", r.metadata.id, r.time, null, off,
-                JSONObject().put("rmssd_ms", r.heartRateVariabilityMillis).put("source", r.metadata.dataOrigin.packageName)))
-        }
-        if (has(WeightRecord::class)) readAll(WeightRecord::class, from, to).forEach { r ->
-            add(record("weight", r.metadata.id, r.time, null, offsetAt(r.time, r.zoneOffset),
-                JSONObject().put("kg", r.weight.inKilograms).put("source", r.metadata.dataOrigin.packageName)))
-        }
-        if (has(BodyFatRecord::class)) readAll(BodyFatRecord::class, from, to).forEach { r ->
-            add(record("body_fat", r.metadata.id, r.time, null, offsetAt(r.time, r.zoneOffset),
-                JSONObject().put("percent", r.percentage.value).put("source", r.metadata.dataOrigin.packageName)))
-        }
-        if (has(OxygenSaturationRecord::class)) readAll(OxygenSaturationRecord::class, from, to).forEach { r ->
-            add(record("oxygen_saturation", r.metadata.id, r.time, null, offsetAt(r.time, r.zoneOffset),
-                JSONObject().put("percent", r.percentage.value).put("source", r.metadata.dataOrigin.packageName)))
-        }
-        val sleeps = if (has(SleepSessionRecord::class)) readAll(SleepSessionRecord::class, from, to) else emptyList()
-        sleeps.forEach { r ->
-            val off = offsetAt(r.endTime, r.endZoneOffset ?: r.startZoneOffset)
-            val stages = JSONArray()
-            r.stages.forEach { s ->
-                stages.put(JSONObject()
-                    .put("start", iso(s.startTime, off))
-                    .put("end", iso(s.endTime, off))
-                    .put("stage", STAGES[s.stage] ?: "unknown"))
-            }
-            val data = JSONObject().put("stages", stages).put("source", r.metadata.dataOrigin.packageName)
-            r.title?.let { data.put("title", it) }
-            add(record("sleep_session", r.metadata.id, r.startTime, r.endTime, off, data))
-        }
-        // FC au repos CALCULÉE : Samsung ne la publie pas dans Health Connect, mais y écrit la FC ~1×/min.
-        if (has(HeartRateRecord::class)) sleeps
-            .filter { Duration.between(it.startTime, it.endTime) >= MIN_NIGHT }
-            .forEach { r -> restingHeartRate(r)?.let(::add) }
-        if (has(ExerciseSessionRecord::class)) readAll(ExerciseSessionRecord::class, from, to).forEach { r ->
-            val off = offsetAt(r.startTime, r.startZoneOffset)
-            val data = JSONObject()
-                // Code numérique : la table code → nom de la bibliothèque est une API restreinte,
-                // le serveur fait la correspondance (shc/exercise_types.py).
-                .put("exercise_type", r.exerciseType)
-                .put("source", r.metadata.dataOrigin.packageName)
-            r.title?.let { data.put("title", it) }
-            exerciseMetrics(r.startTime, r.endTime, data)
-            add(record("exercise_session", r.metadata.id, r.startTime, r.endTime, off, data))
+        for (type in RAW_TYPES) {
+            if (!has(type)) continue
+            @Suppress("UNCHECKED_CAST")
+            readAll(type as KClass<Record>, from, to).forEach { r -> convert(r).forEach(::add) }
         }
         return out
+    }
+
+    /** Un enregistrement Health Connect → 0, 1 ou 2 enregistrements serveur (nuit + FC au repos calculée). */
+    private suspend fun convert(r: Record): List<JSONObject> {
+        val src = r.metadata.dataOrigin.packageName
+        return when (r) {
+            is RestingHeartRateRecord -> listOf(record("resting_heart_rate", r.metadata.id, r.time, null,
+                offsetAt(r.time, r.zoneOffset), JSONObject().put("bpm", r.beatsPerMinute).put("source", src)))
+            is HeartRateVariabilityRmssdRecord -> listOf(record("hrv_rmssd", r.metadata.id, r.time, null,
+                offsetAt(r.time, r.zoneOffset), JSONObject().put("rmssd_ms", r.heartRateVariabilityMillis).put("source", src)))
+            is WeightRecord -> listOf(record("weight", r.metadata.id, r.time, null, offsetAt(r.time, r.zoneOffset),
+                JSONObject().put("kg", r.weight.inKilograms).put("source", src)))
+            is BodyFatRecord -> listOf(record("body_fat", r.metadata.id, r.time, null, offsetAt(r.time, r.zoneOffset),
+                JSONObject().put("percent", r.percentage.value).put("source", src)))
+            is OxygenSaturationRecord -> listOf(record("oxygen_saturation", r.metadata.id, r.time, null,
+                offsetAt(r.time, r.zoneOffset), JSONObject().put("percent", r.percentage.value).put("source", src)))
+            is SleepSessionRecord -> {
+                val off = offsetAt(r.endTime, r.endZoneOffset ?: r.startZoneOffset)
+                val stages = JSONArray()
+                r.stages.forEach { st ->
+                    stages.put(JSONObject().put("start", iso(st.startTime, off)).put("end", iso(st.endTime, off))
+                        .put("stage", STAGES[st.stage] ?: "unknown"))
+                }
+                val data = JSONObject().put("stages", stages).put("source", src)
+                r.title?.let { data.put("title", it) }
+                // FC au repos CALCULÉE : Samsung ne la publie pas dans Health Connect, mais y écrit la FC ~1×/min.
+                val rhr = if (has(HeartRateRecord::class) && Duration.between(r.startTime, r.endTime) >= MIN_NIGHT)
+                    restingHeartRate(r) else null
+                listOfNotNull(record("sleep_session", r.metadata.id, r.startTime, r.endTime, off, data), rhr)
+            }
+            is ExerciseSessionRecord -> {
+                val data = JSONObject()
+                    // Code numérique : la table code → nom de la bibliothèque est une API restreinte,
+                    // le serveur fait la correspondance (shc/exercise_types.py).
+                    .put("exercise_type", r.exerciseType).put("source", src)
+                r.title?.let { data.put("title", it) }
+                exerciseMetrics(r.startTime, r.endTime, data)
+                listOf(record("exercise_session", r.metadata.id, r.startTime, r.endTime, offsetAt(r.startTime, r.startZoneOffset), data))
+            }
+            else -> emptyList()
+        }
+    }
+
+    private fun startOf(r: Record): Instant? = when (r) {
+        is RestingHeartRateRecord -> r.time
+        is HeartRateVariabilityRmssdRecord -> r.time
+        is WeightRecord -> r.time
+        is BodyFatRecord -> r.time
+        is OxygenSaturationRecord -> r.time
+        is SleepSessionRecord -> r.startTime
+        is ExerciseSessionRecord -> r.startTime
+        else -> null
+    }
+
+    /** Jeton du journal des changements, pour les types « bruts » autorisés (pas les pas ni la FC : volumineux). */
+    suspend fun changesToken(grantedPermissions: Set<String>): String? {
+        granted = grantedPermissions
+        val types = RAW_TYPES.filter { has(it) }.toSet()
+        return if (types.isEmpty()) null else client.getChangesToken(ChangesTokenRequest(types))
+    }
+
+    data class Changes(val records: JSONArray, val nextToken: String?, val expired: Boolean, val deletions: Int, val late: Int)
+
+    /**
+     * Ce que la relecture de la fenêtre [windowStart, maintenant] ne voit pas : les SUPPRESSIONS (marqueur
+     * {"type": "deletion", "id"}) et les ajouts ou corrections d'enregistrements plus anciens que la fenêtre.
+     */
+    suspend fun changesSince(token: String, windowStart: Instant, grantedPermissions: Set<String>): Changes {
+        granted = grantedPermissions
+        val out = JSONArray()
+        var next: String? = token
+        var deletions = 0
+        var late = 0
+        while (next != null) {
+            val resp = client.getChanges(next)
+            if (resp.changesTokenExpired) return Changes(out, null, true, deletions, late)
+            for (ch in resp.changes) when (ch) {
+                is DeletionChange -> { out.put(JSONObject().put("type", "deletion").put("id", ch.recordId)); deletions++ }
+                is UpsertionChange -> {
+                    val r = ch.record
+                    val start = startOf(r)
+                    if (start != null && start.isBefore(windowStart)) { convert(r).forEach { out.put(it) }; late++ }
+                }
+            }
+            next = resp.nextChangesToken
+            if (!resp.hasMore) break
+        }
+        return Changes(out, next, false, deletions, late)
     }
 
     /**

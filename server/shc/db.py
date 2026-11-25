@@ -156,6 +156,14 @@ class Store:
         Renvoie le nombre de lignes réellement écrites."""
         if mode not in ("upsert", "ignore"):
             raise ValueError(mode)
+        records = list(records)
+        # Marqueurs de suppression envoyés par le téléphone (journal des changements de Health Connect) :
+        # {"type": "deletion", "id": <id Health Connect>} — supprime l'enregistrement et la FC au repos
+        # calculée qui en dépend, parmi les seuls types venus du téléphone.
+        deletions = [r.get("id") for r in records if isinstance(r, dict) and r.get("type") == "deletion"]
+        if any(not isinstance(d, str) or not d or len(d) > 200 for d in deletions):
+            raise RecordError("marqueur de suppression sans id valide")
+        records = [r for r in records if not (isinstance(r, dict) and r.get("type") == "deletion")]
         rows = []
         for i, raw in enumerate(records):
             try:
@@ -177,6 +185,12 @@ class Store:
                        ON CONFLICT (type, id) {conflict}""",
                     [(*r, now) for r in rows],
                 )
+                if deletions:
+                    marks = ",".join("?" * len(RECORD_TYPES))
+                    for d in deletions:
+                        self._conn.execute(
+                            f"DELETE FROM records WHERE type IN ({marks}) AND id IN (?, ?)",
+                            (*sorted(RECORD_TYPES), d, f"calc:rhr:{d}"))
                 written = self._conn.total_changes - before
                 self._conn.execute(
                     "INSERT INTO ingests (received_at, count, client) VALUES (?, ?, ?)", (now, written, client)

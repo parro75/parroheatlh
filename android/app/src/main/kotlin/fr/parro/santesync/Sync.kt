@@ -79,9 +79,23 @@ object Sync {
         val first = if (HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted) FIRST_IMPORT_HISTORY else FIRST_IMPORT
         // Nouveau calcul local (ou première synchro) : on relit toute la profondeur disponible.
         val backfill = prefs.calcVersion < CALC_VERSION
-        val from = if (backfill) now.minus(first) else prefs.lastSync?.minus(OVERLAP) ?: now.minus(first)
+        var from = if (backfill) now.minus(first) else prefs.lastSync?.minus(OVERLAP) ?: now.minus(first)
 
-        val records = HealthReader(client).read(from, now, granted)
+        // Journal des changements : suppressions et corrections plus anciennes que la fenêtre relue.
+        val reader = HealthReader(client)
+        var nextToken: String? = null
+        var changes: HealthReader.Changes? = null
+        val old = prefs.changesToken
+        if (old != null && !backfill) {
+            changes = reader.changesSince(old, from, granted)
+            if (changes.expired) from = now.minus(first) // jeton périmé (30 j sans synchro) : relecture complète
+            else nextToken = changes.nextToken
+        }
+        // Jeton pris AVANT la relecture : rien ne peut tomber entre les deux.
+        if (nextToken == null) nextToken = reader.changesToken(granted)
+
+        val records = reader.read(from, now, granted)
+        changes?.takeIf { !it.expired }?.records?.let { for (k in 0 until it.length()) records.put(it.get(k)) }
         val (journal, journalIds) = Journal.pending(context)
         for (k in 0 until journal.length()) records.put(journal.get(k))
         var sent = 0
@@ -93,10 +107,12 @@ object Sync {
             i += CHUNK
         }
         if (journalIds.isNotEmpty()) Journal.markSent(context, journalIds)
+        prefs.changesToken = nextToken // seulement après un envoi réussi
         prefs.lastSync = now
         if (backfill) prefs.calcVersion = CALC_VERSION
         val missing = HealthReader.READ_PERMISSIONS.count { it !in granted }
-        val note = if (missing > 0) " ($missing type(s) non autorisé(s))" else ""
+        val note = (if (missing > 0) " ($missing type(s) non autorisé(s))" else "") +
+            (changes?.takeIf { !it.expired && (it.deletions + it.late) > 0 }?.let { " · ${it.deletions} suppression(s), ${it.late} correction(s) anciennes" } ?: "")
         return SyncResult.Ok("$sent enregistrements envoyés depuis le ${from.atZone(ZoneId.systemDefault()).toLocalDate()}$note")
     }
 

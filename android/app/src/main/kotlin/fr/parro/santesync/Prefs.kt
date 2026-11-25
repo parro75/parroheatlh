@@ -30,6 +30,11 @@ class Prefs(context: Context) {
         get() = sp.getInt("calc_version", 0)
         set(v) = sp.edit { putInt("calc_version", v) }
 
+    /** Jeton du journal des changements de Health Connect (suppressions, corrections anciennes). */
+    var changesToken: String?
+        get() = sp.getString("changes_token", null)
+        set(v) = sp.edit { if (v == null) remove("changes_token") else putString("changes_token", v) }
+
     /** Verrouillage biométrique à l'ouverture (option des Réglages). */
     var lockEnabled: Boolean
         get() = sp.getBoolean("lock_enabled", false)
