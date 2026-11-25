@@ -44,6 +44,14 @@ sante.example.org {
 		method POST
 		path /ingest
 	}
+	# Export Samsung Health envoyé par l'app, par morceaux de 15 Mio (limite de 20 Mo conservée).
+	@ingest_export {
+		method POST PUT GET
+		path /ingest-export/*
+	}
+	handle @ingest_export {
+		reverse_proxy 172.26.0.2:8080
+	}
 	handle @ingest {
 		reverse_proxy 172.26.0.2:8080
 	}
