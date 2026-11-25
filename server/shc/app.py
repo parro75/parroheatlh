@@ -30,11 +30,13 @@ MAX_BODY = 20 * 1024 * 1024
 MAX_RECORDS = 20_000
 
 INSTRUCTIONS = (
-    "Données de santé personnelles de l'utilisateur, issues de Samsung Health (Galaxy Watch) "
-    "via Health Connect sur son téléphone. Lecture seule. Dates au format AAAA-MM-JJ ; "
-    "sans dates, les 7 derniers jours. Une nuit de sommeil est rattachée au jour du réveil. "
-    "Appeler get_sync_status pour savoir jusqu'où les données sont à jour avant de conclure "
-    "à une absence de données."
+    "Données de santé personnelles de l'utilisateur, issues de Samsung Health (Galaxy Watch) : "
+    "synchro continue via Health Connect (pas, FC, sommeil, SpO2, séances, poids) et imports d'exports "
+    "Samsung Health (historique depuis 2015, HRV, scores de sommeil, vitaux nocturnes, score d'énergie, "
+    "stress, charge d'entraînement — à jour seulement jusqu'au dernier import). Lecture seule. "
+    "Dates AAAA-MM-JJ ; sans dates, les 7 derniers jours ; 366 jours au plus par appel, sauf get_trends "
+    "(moyennes par semaine/mois/année sur 20 ans). Une nuit est rattachée au jour du réveil. "
+    "Appeler get_sync_status pour connaître la couverture de chaque type avant de conclure à une absence."
 )
 
 DateArg = Annotated[str | None, Field(description="AAAA-MM-JJ (inclus)", pattern=r"^\d{4}-\d{2}-\d{2}$")]
@@ -104,6 +106,41 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     def get_workouts(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
         """Séances d'exercice : type, durée, distance, calories, FC moyenne/max, application source."""
         return run(queries.workouts, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_recovery(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
+        """Récupération nocturne par jour : HRV (ms), FC de sommeil, fréquence respiratoire, écart de
+        température cutanée, SpO2 et score d'énergie Samsung (0-100)."""
+        return run(queries.recovery, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_stress(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
+        """Stress Samsung par jour : moyenne, max, min (0-100) et nombre de mesures."""
+        return run(queries.stress, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_training_load(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
+        """Charge d'entraînement Samsung par jour : aiguë (7 j), chronique (28 j), temps de récupération,
+        plage recommandée."""
+        return run(queries.training_load, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_trends(
+        metric: Annotated[str, Field(description="steps, sleep_minutes, sleep_score, hrv_nightly, hrv, "
+                                                 "sleeping_hr, heart_rate_avg, weight, body_fat, stress, "
+                                                 "energy ou workout_minutes")],
+        period: Annotated[str, Field(description="week, month ou year")] = "month",
+        start: DateArg = None,
+        end: DateArg = None,
+    ) -> dict[str, Any]:
+        """Tendance longue d'une métrique : moyenne, min et max des valeurs quotidiennes par semaine,
+        mois ou année (jusqu'à 20 ans ; par défaut les 12 derniers mois)."""
+        today = datetime.now(settings.tz).date()
+        try:
+            d0, d1 = queries.trend_range(start, end, today)
+            return queries.trends(store, metric, period, d0, d1)
+        except queries.QueryError as exc:
+            raise ToolError(str(exc)) from exc
 
     @mcp.tool(annotations=READ_ONLY)
     def get_sync_status() -> dict[str, Any]:

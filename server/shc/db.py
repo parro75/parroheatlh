@@ -25,8 +25,20 @@ RECORD_TYPES = frozenset(
     }
 )
 
+# Types qui n'arrivent QUE par l'import d'un export Samsung Health (Health Connect ne les publie pas).
+IMPORT_ONLY_TYPES = frozenset(
+    {
+        "sleep_score",  # score et récupérations d'une nuit (rattaché au jour du réveil)
+        "vitals_daily",  # vitaux nocturnes : HRV, FC de sommeil, respiration, température cutanée, SpO2
+        "energy_score",  # score d'énergie (vitality score)
+        "stress_daily",  # agrégat quotidien des mesures de stress
+        "training_load_daily",  # charge d'entraînement aiguë / chronique, temps de récupération
+    }
+)
+ALL_TYPES = RECORD_TYPES | IMPORT_ONLY_TYPES
+
 # La nuit appartient au jour du réveil.
-_DATE_FROM_END = frozenset({"sleep_session"})
+_DATE_FROM_END = frozenset({"sleep_session", "sleep_score"})
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS records (
@@ -106,11 +118,11 @@ class Store:
         self._conn.close()
 
     # ---- écriture -------------------------------------------------------
-    def _normalise(self, raw: Any) -> tuple:
+    def _normalise(self, raw: Any, allowed: frozenset[str] = RECORD_TYPES) -> tuple:
         if not isinstance(raw, dict):
             raise RecordError("enregistrement non objet")
         rec_type = raw.get("type")
-        if rec_type not in RECORD_TYPES:
+        if rec_type not in allowed:
             raise RecordError(f"type inconnu : {rec_type!r}")
         rec_id = raw.get("id")
         if not isinstance(rec_id, str) or not rec_id or len(rec_id) > 200:
@@ -134,34 +146,56 @@ class Store:
             json.dumps(data, separators=(",", ":"), ensure_ascii=False),
         )
 
-    def upsert(self, records: Iterable[Any], client: str | None = None) -> int:
-        """Valide TOUT puis écrit en une transaction : un lot est accepté ou refusé en bloc."""
+    def upsert(self, records: Iterable[Any], client: str | None = None, *, mode: str = "upsert",
+               allowed: frozenset[str] = RECORD_TYPES) -> int:
+        """Valide TOUT puis écrit en une transaction : un lot est accepté ou refusé en bloc.
+
+        mode="upsert" (téléphone) remplace un enregistrement existant ; mode="ignore" (import d'export)
+        n'écrit que ce qui manque, si bien que Health Connect garde toujours la priorité.
+        Renvoie le nombre de lignes réellement écrites."""
+        if mode not in ("upsert", "ignore"):
+            raise ValueError(mode)
         rows = []
         for i, raw in enumerate(records):
             try:
-                rows.append(self._normalise(raw))
+                rows.append(self._normalise(raw, allowed))
             except RecordError as exc:
                 raise RecordError(f"records[{i}] : {exc}") from None
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
             self._conn.execute("BEGIN")
             try:
-                self._conn.executemany(
-                    """INSERT INTO records (type, id, start, end, start_ts, local_date, data, received_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT (type, id) DO UPDATE SET
+                conflict = ("DO NOTHING" if mode == "ignore" else
+                            """DO UPDATE SET
                          start=excluded.start, end=excluded.end, start_ts=excluded.start_ts,
-                         local_date=excluded.local_date, data=excluded.data, received_at=excluded.received_at""",
+                         local_date=excluded.local_date, data=excluded.data, received_at=excluded.received_at""")
+                before = self._conn.total_changes
+                self._conn.executemany(
+                    f"""INSERT INTO records (type, id, start, end, start_ts, local_date, data, received_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (type, id) {conflict}""",
                     [(*r, now) for r in rows],
                 )
+                written = self._conn.total_changes - before
                 self._conn.execute(
-                    "INSERT INTO ingests (received_at, count, client) VALUES (?, ?, ?)", (now, len(rows), client)
+                    "INSERT INTO ingests (received_at, count, client) VALUES (?, ?, ?)", (now, written, client)
                 )
                 self._conn.execute("COMMIT")
             except BaseException:
                 self._conn.execute("ROLLBACK")
                 raise
-        return len(rows)
+        return written
+
+    def spans(self, rec_type: str) -> list[tuple[float, float]]:
+        """(début, fin) en secondes epoch de tous les enregistrements d'un type — pour éviter les doublons
+        à l'import (une nuit ou une séance déjà reçue de Health Connect n'est pas réimportée)."""
+        with self._lock:
+            rows = self._conn.execute("SELECT start_ts, end FROM records WHERE type = ?", (rec_type,)).fetchall()
+        out = []
+        for start_ts, end in rows:
+            end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() if end else start_ts
+            out.append((start_ts, end_ts))
+        return out
 
     # ---- lecture --------------------------------------------------------
     def fetch(self, rec_type: str, start: date, end: date) -> list[Row]:

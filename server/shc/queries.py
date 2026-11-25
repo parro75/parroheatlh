@@ -92,23 +92,49 @@ def summarise_sleep(row: Row) -> dict[str, Any]:
     return out
 
 
+def _attach_scores(rows: list[Row], nights: list[dict[str, Any]], scores: list[Row]) -> None:
+    """Score Samsung (import d'export) rattaché à la nuit du même jour dont la fin est la plus proche (< 3 h)."""
+    by_day: dict[str, list[Row]] = defaultdict(list)
+    for sc in scores:
+        by_day[sc.local_date].append(sc)
+    for row, night in zip(rows, nights):
+        if not row.end:
+            continue
+        end = datetime.fromisoformat(row.end)
+        best, gap = None, timedelta(hours=3)
+        for sc in by_day.get(row.local_date, []):
+            if sc.end and abs(datetime.fromisoformat(sc.end) - end) < gap:
+                best, gap = sc, abs(datetime.fromisoformat(sc.end) - end)
+        if best:
+            d = best.data
+            night["score"] = d.get("score")
+            for k in ("efficiency", "mental_recovery", "physical_recovery"):
+                if d.get(k) is not None:
+                    night[k] = d[k]
+
+
 def sleep(store: Store, start: date, end: date) -> dict[str, Any]:
-    nights = [summarise_sleep(r) for r in store.fetch("sleep_session", start, end)]
+    rows = store.fetch("sleep_session", start, end)
+    nights = [summarise_sleep(r) for r in rows]
+    _attach_scores(rows, nights, store.fetch("sleep_score", start, end))
     asleep = [n["asleep_min"] for n in nights if n["asleep_min"] is not None]
+    scores = [n["score"] for n in nights if n.get("score") is not None]
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "note": "date = jour du réveil ; heures en heure locale de l'enregistrement",
+        "note": "date = jour du réveil ; heures en heure locale ; score = score de sommeil Samsung (0-100)",
         "sessions": nights,
         "avg_asleep_min": _r(mean(asleep)) if asleep else None,
+        "avg_score": _r(mean(scores)) if scores else None,
     }
 
 
 def heart_rate(store: Store, start: date, end: date) -> dict[str, Any]:
     daily = _last_per_day(store.fetch("heart_rate_daily", start, end))
     resting = _last_per_day(store.fetch("resting_heart_rate", start, end))
+    sleeping = _sleeping_hr(store, start, end)
     days = []
-    for d in sorted(set(daily) | set(resting)):
+    for d in sorted(set(daily) | set(resting) | set(sleeping)):
         hr = daily[d].data if d in daily else {}
         days.append(
             {
@@ -117,9 +143,21 @@ def heart_rate(store: Store, start: date, end: date) -> dict[str, Any]:
                 "avg": _r(hr.get("avg")),
                 "max": hr.get("max"),
                 "resting": resting[d].data.get("bpm") if d in resting else None,
+                "sleeping": sleeping.get(d),
             }
         )
-    return {"start": start.isoformat(), "end": end.isoformat(), "unit": "bpm", "days": days}
+    return {"start": start.isoformat(), "end": end.isoformat(), "unit": "bpm",
+            "note": "sleeping = FC moyenne pendant le sommeil (Samsung), l'équivalent d'une FC au repos",
+            "days": days}
+
+
+def _sleeping_hr(store: Store, start: date, end: date) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for rtype in ("energy_score", "vitals_daily"):  # vitals_daily, plus récent, l'emporte
+        for r in store.fetch(rtype, start, end):
+            if isinstance(r.data.get("sleeping_hr"), (int, float)):
+                out[r.local_date] = r.data["sleeping_hr"]
+    return out
 
 
 def hrv(store: Store, start: date, end: date) -> dict[str, Any]:
@@ -196,3 +234,144 @@ def workouts(store: Store, start: date, end: date) -> dict[str, Any]:
             w[key] = _r(v, nd) if nd is not None else v
         out.append(w)
     return {"start": start.isoformat(), "end": end.isoformat(), "workouts": out}
+
+
+# ---- données issues de l'export Samsung Health ------------------------------------------
+
+
+def recovery(store: Store, start: date, end: date) -> dict[str, Any]:
+    vitals = _last_per_day(store.fetch("vitals_daily", start, end))
+    energy = _last_per_day(store.fetch("energy_score", start, end))
+    days = []
+    for d in sorted(set(vitals) | set(energy)):
+        v = vitals[d].data if d in vitals else {}
+        e = energy[d].data if d in energy else {}
+        row: dict[str, Any] = {"date": d}
+        row["hrv_ms"] = v.get("hrv_ms", e.get("hrv_ms"))
+        row["sleeping_hr"] = v.get("sleeping_hr", e.get("sleeping_hr"))
+        for k in ("respiratory_rate", "spo2"):
+            if v.get(k) is not None:
+                row[k] = v[k]
+        if v.get("skin_temp_c") is not None and v.get("skin_temp_baseline_c") is not None:
+            row["skin_temp_delta_c"] = round(v["skin_temp_c"] - v["skin_temp_baseline_c"], 2)
+        if e.get("score") is not None:
+            row["energy_score"] = e["score"]
+        days.append({k: val for k, val in row.items() if val is not None})
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "note": "valeurs nocturnes Samsung (montre) : HRV en ms, FC de sommeil en bpm, respiration /min, "
+                    "écart de température cutanée à la ligne de base ; energy_score 0-100. "
+                    "Source : import d'export Samsung Health (pas de mise à jour continue).",
+            "days": days}
+
+
+def stress(store: Store, start: date, end: date) -> dict[str, Any]:
+    days = [{"date": r.local_date, **{k: r.data.get(k) for k in ("avg", "max", "min", "n")}}
+            for r in _last_per_day(store.fetch("stress_daily", start, end)).values()]
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "note": "score de stress Samsung 0-100 (plus haut = plus stressé), agrégé par jour", "days": days}
+
+
+def training_load(store: Store, start: date, end: date) -> dict[str, Any]:
+    days = [{"date": r.local_date, **{k: v for k, v in r.data.items() if k != "source" and v is not None}}
+            for r in _last_per_day(store.fetch("training_load_daily", start, end)).values()]
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "note": "charge d'entraînement Samsung : acute = 7 jours, chronic = 28 jours", "days": days}
+
+
+# ---- tendances longues ---------------------------------------------------------------------
+
+TREND_MAX_DAYS = 366 * 20
+PERIODS = ("week", "month", "year")
+
+
+def _period_key(d: str, period: str) -> str:
+    day = date.fromisoformat(d)
+    if period == "year":
+        return str(day.year)
+    if period == "month":
+        return d[:7]
+    iso = day.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _daily_values(store: Store, metric: str, start: date, end: date) -> dict[str, float]:
+    """Une valeur par jour local pour la métrique demandée."""
+    def per_day(rtype: str, field: str, agg=mean) -> dict[str, float]:
+        acc: dict[str, list[float]] = defaultdict(list)
+        for r in store.fetch(rtype, start, end):
+            v = r.data.get(field)
+            if isinstance(v, (int, float)):
+                acc[r.local_date].append(float(v))
+        return {d: agg(v) for d, v in acc.items()}
+
+    if metric == "steps":
+        return per_day("steps_daily", "count", max)
+    if metric == "sleep_minutes":
+        out: dict[str, float] = defaultdict(float)
+        for r in store.fetch("sleep_session", start, end):
+            s = summarise_sleep(r)
+            m = s["asleep_min"] if s["asleep_min"] is not None else s["in_bed_min"]
+            if m:
+                out[r.local_date] += m
+        return dict(out)
+    if metric == "sleep_score":
+        return per_day("sleep_score", "score", max)
+    if metric == "hrv_nightly":
+        return {**per_day("energy_score", "hrv_ms"), **per_day("vitals_daily", "hrv_ms")}
+    if metric == "hrv":
+        return per_day("hrv_rmssd", "rmssd_ms")
+    if metric == "sleeping_hr":
+        return {**per_day("energy_score", "sleeping_hr"), **per_day("vitals_daily", "sleeping_hr")}
+    if metric == "heart_rate_avg":
+        return per_day("heart_rate_daily", "avg")
+    if metric == "weight":
+        return per_day("weight", "kg")
+    if metric == "body_fat":
+        return per_day("body_fat", "percent")
+    if metric == "stress":
+        return per_day("stress_daily", "avg")
+    if metric == "energy":
+        return per_day("energy_score", "score")
+    if metric == "workout_minutes":
+        out = defaultdict(float)
+        for r in store.fetch("exercise_session", start, end):
+            if r.end:
+                out[r.local_date] += _minutes(r.start, r.end)
+        return dict(out)
+    raise QueryError(f"métrique inconnue : {metric}")
+
+
+TREND_METRICS = ("steps", "sleep_minutes", "sleep_score", "hrv_nightly", "hrv", "sleeping_hr",
+                 "heart_rate_avg", "weight", "body_fat", "stress", "energy", "workout_minutes")
+
+
+def trends(store: Store, metric: str, period: str, start: date, end: date) -> dict[str, Any]:
+    if metric not in TREND_METRICS:
+        raise QueryError(f"métrique inconnue ; au choix : {', '.join(TREND_METRICS)}")
+    if period not in PERIODS:
+        raise QueryError("period : week, month ou year")
+    groups: dict[str, list[float]] = defaultdict(list)
+    for d, v in _daily_values(store, metric, start, end).items():
+        groups[_period_key(d, period)].append(v)
+    rows = []
+    for key in sorted(groups):
+        vals = groups[key]
+        total = metric in ("workout_minutes",)
+        rows.append({"period": key, "days": len(vals), "avg": _r(mean(vals), 1),
+                     "min": _r(min(vals), 1), "max": _r(max(vals), 1),
+                     **({"total": _r(sum(vals))} if total else {})})
+    return {"metric": metric, "period": period, "start": start.isoformat(), "end": end.isoformat(),
+            "note": "moyenne des valeurs QUOTIDIENNES de chaque période ; days = jours avec donnée", "rows": rows}
+
+
+def trend_range(start: str | None, end: str | None, today: date) -> tuple[date, date]:
+    try:
+        d_end = date.fromisoformat(end) if end else today
+        d_start = date.fromisoformat(start) if start else d_end - timedelta(days=365)
+    except ValueError as exc:
+        raise QueryError("dates attendues au format AAAA-MM-JJ") from exc
+    if d_start > d_end:
+        raise QueryError("start est après end")
+    if (d_end - d_start).days + 1 > TREND_MAX_DAYS:
+        raise QueryError("plage limitée à 20 ans")
+    return d_start, d_end

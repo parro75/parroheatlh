@@ -14,7 +14,7 @@ from conftest import AUTH, full_login, sample_records
 
 EXPECTED_TOOLS = {
     "get_daily_steps", "get_sleep", "get_heart_rate", "get_hrv", "get_body_measurements",
-    "get_spo2", "get_workouts", "get_sync_status",
+    "get_spo2", "get_workouts", "get_sync_status", "get_recovery", "get_stress", "get_training_load", "get_trends",
 }
 
 
@@ -63,7 +63,8 @@ def test_mcp_end_to_end(live_server):
 
     assert out["steps"]["days"] == [{"date": "2026-11-23", "steps": 8412}, {"date": "2026-11-24", "steps": 10231}]
     assert out["steps"]["total"] == 18643
-    assert out["hr"]["days"] == [{"date": "2026-11-24", "min": 48, "avg": 66, "max": 162, "resting": 52}]
+    assert out["hr"]["days"] == [{"date": "2026-11-24", "min": 48, "avg": 66, "max": 162, "resting": 52,
+                                  "sleeping": None}]
     assert out["hrv"]["days"][0] == {"date": "2026-11-24", "rmssd_avg": 44.5, "rmssd_min": 41.2,
                                      "rmssd_max": 47.8, "n": 2}
     assert out["body"]["days"] == [{"date": "2026-11-24", "weight_kg": 78.43, "body_fat_pct": 18.3}]
