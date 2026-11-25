@@ -107,6 +107,28 @@ class Row:
     data: dict[str, Any]
 
 
+# Mesures ponctuelles en double (25/11/2026) : Samsung Health contient des pesées enregistrées 2 ou 3 fois
+# (même minute, même valeur, identifiants différents) ; un réimport les recopierait. À la LECTURE, une
+# mesure de même source, même valeur et à moins de 10 min d'une mesure déjà retenue est ignorée.
+# Deux pesées successives aux valeurs différentes (99,5 puis 99,1 kg) restent deux mesures.
+DEDUP_FIELDS = {"weight": "kg", "body_fat": "percent"}
+DEDUP_WINDOW_S = 600
+
+
+def _without_duplicates(rows: list[tuple[Row, float]], field: str) -> list[Row]:
+    kept: list[tuple[Row, float]] = []
+    for row, ts in rows:
+        v = row.data.get(field)
+        if v is not None and any(
+            k.data.get("source") == row.data.get("source") and k.data.get(field) is not None
+            and abs(float(k.data[field]) - float(v)) < 0.05 and abs(kts - ts) <= DEDUP_WINDOW_S
+            for k, kts in kept
+        ):
+            continue
+        kept.append((row, ts))
+    return [r for r, _ in kept]
+
+
 class Store:
     def __init__(self, path: str, fallback_tz: tzinfo):
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -217,12 +239,15 @@ class Store:
     def fetch(self, rec_type: str, start: date, end: date) -> list[Row]:
         with self._lock:
             cur = self._conn.execute(
-                """SELECT type, id, start, end, local_date, data FROM records
+                """SELECT type, id, start, end, local_date, data, start_ts FROM records
                    WHERE type = ? AND local_date BETWEEN ? AND ?
                    ORDER BY local_date, start_ts""",
                 (rec_type, start.isoformat(), end.isoformat()),
             )
-            return [Row(t, i, s, e, d, json.loads(js)) for t, i, s, e, d, js in cur.fetchall()]
+            rows = [(Row(t, i, s, e, d, json.loads(js)), ts) for t, i, s, e, d, js, ts in cur.fetchall()]
+        if rec_type in DEDUP_FIELDS:
+            return _without_duplicates(rows, DEDUP_FIELDS[rec_type])
+        return [r for r, _ in rows]
 
     def last_ingest_from(self, client_prefix: str) -> str | None:
         """Heure (UTC ISO) de la dernière ingestion d'un client donné, ex. « SanteSync » pour le téléphone."""
