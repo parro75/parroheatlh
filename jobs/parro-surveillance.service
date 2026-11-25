@@ -1,0 +1,18 @@
+[Unit]
+Description=Parro Health — alerte si le téléphone ne synchronise plus (seuils décidés par le serveur)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/parro-rapport/rapport_ia.py --surveillance
+DynamicUser=yes
+LoadCredential=rapport.env:/etc/parro-sante/rapport.env
+Environment=PARRO_ENV_FILE=%d/rapport.env
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+TimeoutStartSec=120

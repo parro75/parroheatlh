@@ -93,8 +93,25 @@ def write_with_model(env: dict, facts: dict) -> str | None:
     return text
 
 
+def watch(env: dict) -> int:
+    """--surveillance : relaie l'alerte « plus de synchro » (seuils décidés par le serveur)."""
+    base = env["SANTE_URL"].rstrip("/")
+    auth = {"Authorization": f"Bearer {env['REPORT_TOKEN']}"}
+    s = http("GET", f"{base}/api/v1/report-job/sync-status", headers=auth)
+    if s["action"] == "none":
+        print(f"synchro : âge {s.get('age_hours')} h, rien à signaler")
+        return 0
+    http("POST", env["HA_WEBHOOK_URL"], {"title": s["title"], "message": s["message"]})
+    http("POST", f"{base}/api/v1/report-job/sync-status/ack",
+         {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
+    print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
+    return 0
+
+
 def main() -> int:
     env = load_env()
+    if "--surveillance" in sys.argv:
+        return watch(env)
     if "--apercu" in sys.argv:
         # Rédige le texte du jour SANS l'enregistrer ni notifier (choix du modèle, réglage du prompt).
         if len(sys.argv) > 2:

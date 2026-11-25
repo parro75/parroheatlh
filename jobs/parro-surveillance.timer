@@ -1,0 +1,9 @@
+[Unit]
+Description=Parro Health — vérifie toutes les 30 min l'âge de la dernière synchro du téléphone
+
+[Timer]
+OnCalendar=*-*-* *:05,35:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

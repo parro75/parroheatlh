@@ -21,7 +21,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, queries, report
+from . import __version__, config, queries, report, syncwatch
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -180,6 +180,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         )],
     )
     reports = report.ReportStore(settings.db_path)
+    watch = syncwatch.SyncWatch(settings.db_path)
     mcp = build_mcp(store, settings, provider, reports)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
@@ -201,6 +202,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         store.close()
         provider.close()
         reports.close()
+        watch.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -294,6 +296,26 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         reports.save_narrative(d, text, model)
         log.info("rapport du %s rédigé (%s, %d car.)", d, model, len(text))
         return JSONResponse({"saved": d})
+
+    def _phone_last_sync() -> str | None:
+        t = [x for x in (store.last_ingest_from("ParroHealth"), store.last_ingest_from("SanteSync")) if x]
+        return max(t) if t else None
+
+    @app.get("/api/v1/report-job/sync-status")
+    async def sync_status(request: Request) -> JSONResponse:
+        require_report_token(request)
+        return JSONResponse(watch.status(_phone_last_sync(), syncwatch.now_utc(), settings.tz),
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/sync-status/ack")
+    async def sync_ack(request: Request) -> JSONResponse:
+        require_report_token(request)
+        body = await request.json()
+        action, last = str(body.get("action", "")), str(body.get("last_phone_sync", ""))
+        if action not in ("alert", "recovered") or not last:
+            raise HTTPException(status_code=422, detail="action alert|recovered et last_phone_sync attendus")
+        watch.ack(action, last)
+        return JSONResponse({"ack": action})
 
     @app.post("/api/v1/report-job/notified")
     async def report_notified(request: Request) -> JSONResponse:
