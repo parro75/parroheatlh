@@ -22,6 +22,8 @@ class Settings:
     redirect_uris: list[str] = field(default_factory=lambda: DEFAULT_REDIRECTS.split(","))
     allowed_hosts: list[str] = field(default_factory=list)
     allowed_origins: list[str] = field(default_factory=list)
+    app_client_id: str = "parro-health-android"
+    app_redirect_uri: str = "fr.parro.health://oauth/callback"
 
     @property
     def mcp_path(self) -> str:
@@ -59,4 +61,6 @@ def load() -> Settings:
         redirect_uris=_csv("OAUTH_REDIRECT_URIS", DEFAULT_REDIRECTS),
         allowed_hosts=_csv("MCP_ALLOWED_HOSTS", urlparse(public).netloc),
         allowed_origins=_csv("MCP_ALLOWED_ORIGINS", "https://claude.ai,https://claude.com"),
+        app_client_id=os.environ.get("APP_CLIENT_ID", "parro-health-android"),
+        app_redirect_uri=os.environ.get("APP_REDIRECT_URI", "fr.parro.health://oauth/callback"),
     )

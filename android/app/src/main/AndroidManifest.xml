@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Boîte de dialogue « ignorer l'optimisation de batterie » : sinon One UI retarde la synchro horaire. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Health Connect : lecture seule. -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />
@@ -23,6 +25,10 @@
     <!-- Android 13 et moins : Health Connect est une appli à part. -->
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Onglets personnalisés (page de connexion du serveur). -->
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
     </queries>
 
     <application
@@ -35,10 +41,25 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Retour de la connexion OAuth : fr.parro.health://oauth/callback?code=…&state=… -->
+        <activity
+            android:name=".OAuthRedirectActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fr.parro.health" android:host="oauth" android:path="/callback" />
             </intent-filter>
         </activity>
 

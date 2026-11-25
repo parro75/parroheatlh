@@ -1,125 +1,135 @@
 package fr.parro.santesync
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Button
-import android.widget.EditText
-import android.widget.TextView
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.core.net.toUri
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
-import androidx.health.connect.client.permission.HealthPermission
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
+import fr.parro.santesync.ui.ActivityScreen
+import fr.parro.santesync.ui.HeartScreen
+import fr.parro.santesync.ui.HomeScreen
+import fr.parro.santesync.ui.ParroTheme
+import fr.parro.santesync.ui.SettingsActions
+import fr.parro.santesync.ui.SettingsScreen
+import fr.parro.santesync.ui.SleepScreen
+import fr.parro.santesync.ui.TrendsScreen
+
+private enum class Tab(val title: String, val icon: ImageVector) {
+    HOME("Accueil", Icons.Filled.Home),
+    SLEEP("Sommeil", Icons.Filled.Star),
+    HEART("Cœur", Icons.Filled.Favorite),
+    ACTIVITY("Activité", Icons.Filled.Place),
+    TRENDS("Tendances", Icons.Filled.DateRange),
+    SETTINGS("Réglages", Icons.Filled.Settings),
+}
 
 class MainActivity : ComponentActivity() {
-    private lateinit var prefs: Prefs
-    private lateinit var url: EditText
-    private lateinit var token: EditText
-    private lateinit var perms: TextView
-    private lateinit var status: TextView
-    private lateinit var syncButton: Button
     private lateinit var requestPermissions: ActivityResultLauncher<Set<String>>
+    private var resumeTick by mutableIntStateOf(0)
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        prefs = Prefs(this)
-        url = findViewById(R.id.server_url)
-        token = findViewById(R.id.token)
-        perms = findViewById(R.id.permissions)
-        status = findViewById(R.id.status)
-        syncButton = findViewById(R.id.sync_now)
-
-        url.setText(prefs.serverUrl)
-        token.setText(prefs.token)
-
-        requestPermissions = registerForActivityResult(
-            PermissionController.createRequestPermissionResultContract()
-        ) { refresh() }
-
-        findViewById<Button>(R.id.save).setOnClickListener { save() }
-        findViewById<Button>(R.id.authorize).setOnClickListener { authorize() }
-        syncButton.setOnClickListener { syncNow() }
+        enableEdgeToEdge()
+        requestPermissions = registerForActivityResult(PermissionController.createRequestPermissionResultContract()) {
+            resumeTick++
+        }
+        val actions = SettingsActions(
+            requestHealthPermissions = {
+                requestPermissions.launch(HealthReader.wantedPermissions(HealthConnectClient.getOrCreate(this)))
+            },
+            requestBatteryExemption = ::requestBatteryExemption,
+            openHealthConnectInstall = {
+                startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=com.google.android.apps.healthdata".toUri()))
+            },
+            toast = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
+        )
+        val firstTab = if (Prefs(this).isConfigured) Tab.HOME else Tab.SETTINGS
+        setContent {
+            ParroTheme {
+                var tab by rememberSaveable { mutableIntStateOf(firstTab.ordinal) }
+                var refresh by rememberSaveable { mutableIntStateOf(0) }
+                val current = Tab.entries[tab]
+                val toLogin = { OAuth.start(this) }
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(if (current == Tab.HOME) getString(R.string.app_name) else current.title) },
+                            actions = {
+                                if (current != Tab.SETTINGS) IconButton(onClick = { refresh++ }) {
+                                    Icon(Icons.Filled.Refresh, contentDescription = "Actualiser")
+                                }
+                                IconButton(onClick = { tab = Tab.SETTINGS.ordinal }) {
+                                    Icon(Icons.Filled.Settings, contentDescription = "Réglages")
+                                }
+                            },
+                        )
+                    },
+                    bottomBar = {
+                        NavigationBar {
+                            Tab.entries.filter { it != Tab.SETTINGS }.forEach { t ->
+                                NavigationBarItem(
+                                    selected = t == current, onClick = { tab = t.ordinal },
+                                    icon = { Icon(t.icon, contentDescription = null) }, label = { Text(t.title) },
+                                )
+                            }
+                        }
+                    },
+                ) { padding ->
+                    androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
+                        val key = refresh + resumeTick
+                        when (current) {
+                            Tab.HOME -> HomeScreen(key, toLogin)
+                            Tab.SLEEP -> SleepScreen(key, toLogin)
+                            Tab.HEART -> HeartScreen(key, toLogin)
+                            Tab.ACTIVITY -> ActivityScreen(key, toLogin)
+                            Tab.TRENDS -> TrendsScreen(key, toLogin)
+                            Tab.SETTINGS -> SettingsScreen(actions, resumeTick) { refresh++ }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        refresh()
+        resumeTick++ // retour d'une autorisation, de la connexion ou des réglages système
     }
 
-    private fun save() {
-        val u = url.text.toString().trim()
-        if (!u.startsWith("https://")) {
-            Toast.makeText(this, R.string.need_https, Toast.LENGTH_LONG).show()
-            return
-        }
-        if (token.text.toString().trim().length < 32) {
-            Toast.makeText(this, R.string.need_token, Toast.LENGTH_LONG).show()
-            return
-        }
-        val changedServer = u.trimEnd('/') != prefs.serverUrl
-        prefs.serverUrl = u
-        prefs.token = token.text.toString()
-        if (changedServer) prefs.lastSync = null // nouveau serveur : import complet
-        SyncWorker.schedule(this)
-        Toast.makeText(this, R.string.saved, Toast.LENGTH_SHORT).show()
-        refresh()
-    }
-
-    private fun authorize() {
-        when (HealthConnectClient.getSdkStatus(this)) {
-            HealthConnectClient.SDK_AVAILABLE ->
-                requestPermissions.launch(HealthReader.wantedPermissions(HealthConnectClient.getOrCreate(this)))
-            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> startActivity(
-                Intent(Intent.ACTION_VIEW, "market://details?id=com.google.android.apps.healthdata".toUri())
-            )
-            else -> Toast.makeText(this, R.string.hc_unavailable, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun syncNow() {
-        syncButton.isEnabled = false
-        status.setText(R.string.syncing)
-        // Au premier plan : pas besoin de la permission d'arrière-plan, et pas de quota de fond.
-        lifecycleScope.launch {
-            Sync.run(applicationContext)
-            syncButton.isEnabled = true
-            refresh()
-        }
-    }
-
-    private fun refresh() {
-        status.text = prefs.lastStatus.ifEmpty { getString(R.string.never_synced) }
-        if (HealthConnectClient.getSdkStatus(this) != HealthConnectClient.SDK_AVAILABLE) {
-            perms.setText(R.string.hc_unavailable)
-            return
-        }
-        val client = HealthConnectClient.getOrCreate(this)
-        lifecycleScope.launch {
-            val granted = try {
-                client.permissionController.getGrantedPermissions()
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                perms.text = e.message ?: e.javaClass.simpleName
-                return@launch
-            }
-            val wanted = HealthReader.wantedPermissions(client)
-            val readOk = HealthReader.READ_PERMISSIONS.count { it in granted }
-            val bg = when {
-                HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND !in wanted -> getString(R.string.feature_absent)
-                HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in granted -> getString(R.string.yes)
-                else -> getString(R.string.no)
-            }
-            val hist = when {
-                HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY !in wanted -> getString(R.string.feature_absent)
-                HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted -> getString(R.string.yes)
-                else -> getString(R.string.no)
-            }
-            perms.text = getString(R.string.permissions_summary, readOk, HealthReader.READ_PERMISSIONS.size, bg, hist)
-        }
+    /** Boîte de dialogue système « Ignorer les optimisations de batterie ? » pour cette seule appli. */
+    @SuppressLint("BatteryLife")
+    private fun requestBatteryExemption() {
+        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
     }
 }

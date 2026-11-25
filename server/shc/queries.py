@@ -375,3 +375,37 @@ def trend_range(start: str | None, end: str | None, today: date) -> tuple[date, 
     if (d_end - d_start).days + 1 > TREND_MAX_DAYS:
         raise QueryError("plage limitée à 20 ans")
     return d_start, d_end
+
+
+# ---- résumé pour l'écran d'accueil de l'app --------------------------------------------------
+
+
+def _latest(store: Store, rtype: str, today: date, days: int) -> Row | None:
+    rows = store.fetch(rtype, today - timedelta(days=days), today)
+    return rows[-1] if rows else None
+
+
+def today(store: Store, day: date) -> dict[str, Any]:
+    """Dernière nuit, pas du jour, FC au repos, HRV, énergie, stress, fraîcheur des données."""
+    out: dict[str, Any] = {"date": day.isoformat()}
+    nights = sleep(store, day - timedelta(days=1), day)["sessions"]
+    if nights:
+        out["last_night"] = max(nights, key=lambda n: n.get("asleep_min") or n.get("in_bed_min") or 0)
+    st = store.fetch("steps_daily", day, day)
+    out["steps_today"] = st[-1].data.get("count") if st else 0
+    week = daily_steps(store, day - timedelta(days=6), day)
+    out["steps_7d_avg"] = week["daily_avg"]
+    if (r := _latest(store, "resting_heart_rate", day, 7)) is not None:
+        out["resting_hr"] = {"date": r.local_date, "bpm": r.data.get("bpm"), "source": r.data.get("source")}
+    for rtype, key, field in (("vitals_daily", "hrv", "hrv_ms"), ("energy_score", "energy", "score"),
+                              ("stress_daily", "stress", "avg")):
+        if (r := _latest(store, rtype, day, 60)) is not None and r.data.get(field) is not None:
+            out[key] = {"date": r.local_date, "value": r.data[field]}
+    if "hrv" not in out and (r := _latest(store, "energy_score", day, 60)) is not None and r.data.get("hrv_ms"):
+        out["hrv"] = {"date": r.local_date, "value": r.data["hrv_ms"]}
+    status = store.status()
+    phone = [t for t in (store.last_ingest_from("SanteSync"), store.last_ingest_from("ParroHealth")) if t]
+    out["last_phone_sync"] = max(phone) if phone else None
+    imported = status["types"].get("vitals_daily") or status["types"].get("energy_score")
+    out["last_export_day"] = imported["last_day"] if imported else None
+    return out

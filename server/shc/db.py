@@ -208,6 +208,14 @@ class Store:
             )
             return [Row(t, i, s, e, d, json.loads(js)) for t, i, s, e, d, js in cur.fetchall()]
 
+    def last_ingest_from(self, client_prefix: str) -> str | None:
+        """Heure (UTC ISO) de la dernière ingestion d'un client donné, ex. « SanteSync » pour le téléphone."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT received_at FROM ingests WHERE client LIKE ? ORDER BY rowid DESC LIMIT 1",
+                (client_prefix.replace("%", "") + "%",)).fetchone()
+        return row[0] if row else None
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             last = self._conn.execute(

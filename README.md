@@ -26,6 +26,7 @@ Python 3.13, SDK MCP officiel **v2** (`mcp==2.3.0`, `MCPServer`), FastAPI, SQLit
 | `/mcp` | MCP streamable HTTP (réponses JSON, sans état) | jeton OAuth (portée `health:read`) + `Host`/`Origin` vérifiés |
 | `/.well-known/…`, `/register`, `/token`, `/revoke` | serveur d'autorisation OAuth 2.1 (SDK MCP) | PKCE S256 obligatoire |
 | `/authorize`, `/login` | connexion du propriétaire | mot de passe (scrypt) + TOTP |
+| `GET /api/v1/<nom>` | lecture pour l'app Android (today, sleep, steps, heart_rate, hrv, recovery, stress, training_load, workouts, body, spo2, trends, status) | jeton OAuth du client public `parro-health-android` (PKCE) |
 | `GET /healthz` | sonde | aucune donnée |
 | tout le reste | 404 | — |
 
@@ -96,39 +97,43 @@ pip install -r requirements-dev.txt
 python -m pytest -q     # ingestion, OAuth (chaque garde-fou), MCP de bout en bout avec jeton
 ```
 
-## App Android (`android/`)
+## App Android « Parro Health » (`android/`)
 
-Kotlin, AGP 9.5 (Kotlin intégré), Gradle 9.9, `compileSdk`/`targetSdk` 36, `minSdk` 29.
-Dépendances : `connect-client` 1.1.0, `work-runtime-ktx`, `activity-ktx`, coroutines. Réseau en
-`HttpURLConnection` + `org.json`. HTTPS imposé.
+Kotlin, Jetpack Compose (Material 3, couleurs dynamiques), AGP 9.5, `compileSdk` 37.1, `targetSdk` 36,
+`minSdk` 29. Identifiant `fr.parro.santesync` conservé depuis « Santé Sync » (le changer ferait perdre
+les permissions Health Connect).
 
-- **Fenêtre** : depuis la dernière synchro réussie moins 2 jours ; premier import 30 jours, ou 365
-  si la permission d'historique est accordée. Lecture paginée (`pageToken`), envoi par lots de 1000.
-- **Pas et FC journaliers** par `aggregateGroupByPeriod` (dédoublonnage par Health Connect) ;
-  distance, calories, FC et pas de chaque séance par `aggregate` sur sa plage.
-- **Synchro horaire** en arrière-plan (réseau requis) ; « Synchroniser maintenant » tourne au premier
-  plan, sans besoin de la permission d'arrière-plan.
-- Jeton dans le stockage privé ; sauvegarde cloud et transfert d'appareil exclus.
+- **Synchro** (inchangée sur le fond) : Health Connect → `POST /ingest`, toutes les heures (WorkManager)
+  ou à la demande ; la ligne de statut et l'en-tête `User-Agent` indiquent **auto** ou **manuel** ; l'écran
+  Réglages affiche la prochaine exécution prévue et propose l'exemption d'optimisation de batterie.
+- **FC au repos calculée** sur le téléphone (Samsung ne la publie pas) : plus basse moyenne glissante sur
+  30 min des mesures de FC (~1/min) pendant chaque nuit de 3 h et plus, et moyenne de la nuit ; seuls ces
+  deux chiffres sont envoyés. Rattrapage d'un an au premier lancement de la version.
+- **Graphiques** : Accueil, Sommeil (phases, score), Cœur (FC au repos/sommeil, HRV, stress, FC jour),
+  Activité (pas, séances), Tendances (semaine/mois/année depuis 2015). Données relues sur le serveur par
+  `GET /api/v1/…` après une connexion OAuth (mot de passe + TOTP dans un onglet de navigateur, PKCE,
+  client public) ; jetons chiffrés par une clé AES du Keystore Android.
+- La HRV n'est pas calculable depuis Health Connect (pas d'intervalles entre battements) : elle vient des
+  exports Samsung Health importés sur le serveur.
+
+### Compiler et signer
 
 ```sh
 cd android
-./gradlew assembleDebug    # → app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug lintDebug          # ce que fait la CI (sans aucune clé)
 ```
 
-La CI (`.github/workflows/build-apk.yml`) lance les tests serveur et publie l'APK en artefact.
-⚠️ Un APK de debug est signé par la clé de debug **de la machine qui compile** : passer d'un APK
-compilé localement à un APK de la CI impose de désinstaller d'abord.
+La **clé de signature stable** (« Parro Health — clé de signature Android » dans le coffre gestionnaire de secrets) ne
+quitte pas l'infrastructure : l'APK de version est signé dans le bac à sable, clé tirée du coffre puis
+détruite, avec les variables `PARRO_SIGNING_STORE_FILE`, `PARRO_SIGNING_STORE_PASSWORD`,
+`PARRO_SIGNING_KEY_ALIAS`, `PARRO_SIGNING_KEY_PASSWORD` et `./gradlew assembleRelease`.
+Certificat : `CN=Parro Health`, SHA-256 `40:09:F2:CB:…:25:5B`.
 
-### Installation sur le téléphone
+### Installation
 
-1. Samsung Health → Réglages → **Health Connect** : vérifier que la synchronisation est active
-   (sinon rien n'arrive dans Health Connect).
-2. Installer l'APK (autoriser l'installation depuis la source utilisée).
-3. Ouvrir *Santé Sync* : URL `https://sante.example.org`, jeton = `INGEST_TOKEN`, **Enregistrer**.
-4. **Autoriser Health Connect** : tout cocher, y compris *arrière-plan* et *historique*.
-5. **Synchroniser maintenant**, puis `get_sync_status` depuis Claude.
-6. Réglages Android → Applis → Santé Sync → Batterie : **Non restreinte**, sinon One UI peut
-   espacer ou suspendre la synchro horaire.
+Samsung Health → Réglages → Health Connect : synchronisation active. Installer l'APK ; Réglages de l'app :
+URL + jeton d'ingestion, **Autoriser** (tout cocher, arrière-plan et historique compris), **Exempter de
+l'optimisation de batterie**, **Se connecter** (graphiques).
 
 ## Limites connues
 

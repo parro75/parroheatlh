@@ -1,21 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Santé Sync</string>
-    <string name="intro">Copie les données Samsung Health lues dans Health Connect vers ton serveur, toutes les heures. Lecture seule : rien n\'est jamais écrit dans Health Connect.</string>
-    <string name="hint_url">URL du serveur (https://…)</string>
-    <string name="hint_token">Jeton d\'ingestion</string>
-    <string name="save">Enregistrer</string>
-    <string name="authorize">Autoriser Health Connect</string>
-    <string name="sync_now">Synchroniser maintenant</string>
-    <string name="syncing">Synchronisation…</string>
-    <string name="saved">Enregistré — synchro horaire planifiée</string>
-    <string name="never_synced">Jamais synchronisé</string>
-    <string name="need_https">L\'URL doit commencer par https://</string>
-    <string name="need_token">Le jeton doit faire au moins 32 caractères</string>
-    <string name="hc_unavailable">Health Connect n\'est pas disponible sur cet appareil</string>
-    <string name="yes">oui</string>
-    <string name="no">non</string>
-    <string name="feature_absent">non proposé</string>
-    <string name="permissions_summary">Types autorisés : %1$d/%2$d · arrière-plan : %3$s · historique : %4$s</string>
-    <string name="rationale">Santé Sync lit dans Health Connect, en lecture seule, les données suivantes : pas, fréquence cardiaque (dont au repos), variabilité cardiaque, sommeil, poids, masse grasse, saturation en oxygène et séances d\'exercice (avec distance et calories).\n\nCes données sont envoyées uniquement au serveur dont tu as saisi l\'adresse, en HTTPS, avec ton jeton. Elles ne sont transmises à aucun tiers par l\'application. Aucune donnée n\'est écrite dans Health Connect.\n\nTu peux retirer ces permissions à tout moment dans les réglages de Health Connect.</string>
+    <string name="app_name">Parro Health</string>
+    <string name="login_ok">Connectée : les graphiques sont disponibles</string>
+    <string name="rationale">Parro Health lit dans Health Connect, en lecture seule, les données suivantes : pas, fréquence cardiaque (dont au repos), variabilité cardiaque, sommeil, poids, masse grasse, saturation en oxygène et séances d\'exercice (avec distance et calories).\n\nCes données sont envoyées uniquement au serveur dont tu as saisi l\'adresse, en HTTPS, avec ton jeton. La fréquence cardiaque au repos est calculée sur le téléphone à partir des mesures de la nuit ; seul le résultat est envoyé. Pour afficher les graphiques, l\'app relit ces données sur ce même serveur après une connexion par mot de passe et code TOTP.\n\nAucune donnée n\'est écrite dans Health Connect ni transmise à un tiers par l\'application. Tu peux retirer ces permissions à tout moment dans les réglages de Health Connect.</string>
 </resources>

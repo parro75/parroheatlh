@@ -17,6 +17,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
@@ -160,6 +161,15 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         resource_url=settings.resource_url,
         owner=OwnerAuth(settings.owner_password_hash, settings.totp_secret),
         redirect_allowlist=settings.redirect_uris,
+        static_clients=[OAuthClientInformationFull(
+            client_id=settings.app_client_id,
+            client_name="Parro Health (Android)",
+            redirect_uris=[settings.app_redirect_uri],
+            token_endpoint_auth_method="none",  # client public : PKCE obligatoire, aucun secret
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            scope=SCOPE,
+        )],
     )
     mcp = build_mcp(store, settings, provider)
     security = TransportSecuritySettings(
@@ -191,6 +201,44 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ---- API de lecture de l'app (jeton OAuth, portée health:read) ------------------------------
+    async def require_token(request: Request) -> None:
+        auth = request.headers.get("authorization", "")
+        token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        access = await provider.load_access_token(token) if token else None
+        if access is None or SCOPE not in access.scopes:
+            raise HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"})
+
+    api_ranges: dict[str, Callable[..., dict[str, Any]]] = {
+        "steps": queries.daily_steps, "sleep": queries.sleep, "heart_rate": queries.heart_rate,
+        "hrv": queries.hrv, "recovery": queries.recovery, "stress": queries.stress,
+        "training_load": queries.training_load, "workouts": queries.workouts, "body": queries.body,
+        "spo2": queries.spo2,
+    }
+
+    @app.get("/api/v1/{name}")
+    async def api_read(name: str, request: Request) -> JSONResponse:
+        await require_token(request)
+        q = request.query_params
+        today = datetime.now(settings.tz).date()
+        try:
+            if name == "today":
+                data = await run_in_threadpool(queries.today, store, today)
+            elif name == "status":
+                data = {"timezone": str(settings.tz), **await run_in_threadpool(store.status)}
+            elif name == "trends":
+                d0, d1 = queries.trend_range(q.get("start"), q.get("end"), today)
+                data = await run_in_threadpool(queries.trends, store, q.get("metric", "steps"),
+                                               q.get("period", "month"), d0, d1)
+            elif name in api_ranges:
+                d0, d1 = queries.date_range(q.get("start"), q.get("end"), today)
+                data = await run_in_threadpool(api_ranges[name], store, d0, d1)
+            else:
+                raise HTTPException(status_code=404, detail="not found")
+        except queries.QueryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
     @app.post("/ingest")
     async def ingest(request: Request) -> JSONResponse:

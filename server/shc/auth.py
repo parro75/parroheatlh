@@ -73,7 +73,7 @@ class HealthOAuthProvider:
     """Implémente OAuthAuthorizationServerProvider (protocole du SDK MCP)."""
 
     def __init__(self, db_path: str, public_url: str, resource_url: str, owner: OwnerAuth,
-                 redirect_allowlist: list[str]):
+                 redirect_allowlist: list[str], static_clients: list[OAuthClientInformationFull] | None = None):
         self._conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
@@ -82,7 +82,11 @@ class HealthOAuthProvider:
         self.public_url = public_url.rstrip("/")
         self.resource_url = resource_url
         self.owner = owner
+        # Liste blanche de l'enregistrement dynamique (DCR) : claude.ai / claude.com seulement.
         self.redirect_allowlist = set(redirect_allowlist)
+        # Clients déclarés par configuration (l'app Android) : jamais créés par /register.
+        self.static_clients = {c.client_id: c for c in (static_clients or [])}
+        self.static_redirects = {str(u) for c in self.static_clients.values() for u in (c.redirect_uris or [])}
 
     # ---- outils --------------------------------------------------------
     def _q(self, sql: str, args: tuple = ()) -> list[tuple]:
@@ -103,6 +107,8 @@ class HealthOAuthProvider:
 
     # ---- clients (DCR) -------------------------------------------------
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        if client_id in self.static_clients:
+            return self.static_clients[client_id]
         rows = self._q("SELECT info FROM oauth_clients WHERE client_id = ?", (client_id,))
         return OAuthClientInformationFull.model_validate_json(rows[0][0]) if rows else None
 
@@ -119,7 +125,7 @@ class HealthOAuthProvider:
 
     # ---- autorisation --------------------------------------------------
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
-        if str(params.redirect_uri) not in self.redirect_allowlist:
+        if str(params.redirect_uri) not in self.redirect_allowlist | self.static_redirects:
             raise AuthorizeError("invalid_request", "redirect_uri non autorisée")
         if params.scopes and any(s != SCOPE for s in params.scopes):
             raise AuthorizeError("invalid_scope", f"seule la portée {SCOPE} existe")
@@ -265,7 +271,8 @@ class HealthOAuthProvider:
 
     # ---- page de connexion ----------------------------------------------
     def _csp(self) -> str:
-        origins = sorted({f"{urlparse(u).scheme}://{urlparse(u).netloc}" for u in self.redirect_allowlist})
+        origins = sorted({f"{urlparse(u).scheme}://{urlparse(u).netloc}" for u in self.redirect_allowlist}
+                         | {f"{urlparse(u).scheme}:" for u in self.static_redirects})
         # form-action couvre aussi la redirection qui suit le POST (vers claude.ai).
         return ("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
                 f"form-action 'self' {' '.join(origins)}")

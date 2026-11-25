@@ -28,16 +28,25 @@ sealed class SyncResult(val message: String) {
 
 class HttpStatusException(val code: Int, body: String) : IOException("HTTP $code : ${body.take(200)}")
 
+/** Origine d'une synchro : affichée dans l'app ET envoyée au serveur (en-tête User-Agent). */
+enum class Trigger(val label: String) { AUTO("auto"), MANUAL("manuel") }
+
 object Sync {
     private val OVERLAP: Duration = Duration.ofDays(2)
     private val FIRST_IMPORT: Duration = Duration.ofDays(30)
     private val FIRST_IMPORT_HISTORY: Duration = Duration.ofDays(365)
     private const val CHUNK = 1000
 
-    suspend fun run(context: Context): SyncResult {
+    /** Version du calcul local (FC au repos) : l'incrémenter relance un rattrapage complet. */
+    private const val CALC_VERSION = 1
+
+    fun userAgent(kind: String) =
+        "ParroHealth/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE}; $kind)"
+
+    suspend fun run(context: Context, trigger: Trigger): SyncResult {
         val prefs = Prefs(context)
         val result = try {
-            doRun(context, prefs)
+            doRun(context, prefs, trigger)
         } catch (e: SecurityException) {
             SyncResult.Fatal("Permission Health Connect refusée : ${e.message}")
         } catch (e: HttpStatusException) {
@@ -53,11 +62,11 @@ object Sync {
         }
         val stamp = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .format(Instant.now().atZone(ZoneId.systemDefault()))
-        prefs.lastStatus = "$stamp — ${result.message}"
+        prefs.lastStatus = "$stamp (${trigger.label}) — ${result.message}"
         return result
     }
 
-    private suspend fun doRun(context: Context, prefs: Prefs): SyncResult {
+    private suspend fun doRun(context: Context, prefs: Prefs, trigger: Trigger): SyncResult {
         if (!prefs.isConfigured) return SyncResult.Fatal("Serveur non configuré (URL https:// et jeton de 32+ caractères)")
         if (HealthConnectClient.getSdkStatus(context) != HealthConnectClient.SDK_AVAILABLE)
             return SyncResult.Fatal("Health Connect indisponible sur cet appareil")
@@ -68,7 +77,9 @@ object Sync {
 
         val now = Instant.now()
         val first = if (HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted) FIRST_IMPORT_HISTORY else FIRST_IMPORT
-        val from = prefs.lastSync?.minus(OVERLAP) ?: now.minus(first)
+        // Nouveau calcul local (ou première synchro) : on relit toute la profondeur disponible.
+        val backfill = prefs.calcVersion < CALC_VERSION
+        val from = if (backfill) now.minus(first) else prefs.lastSync?.minus(OVERLAP) ?: now.minus(first)
 
         val records = HealthReader(client).read(from, now, granted)
         var sent = 0
@@ -76,16 +87,17 @@ object Sync {
         while (i < records.length()) {
             val chunk = JSONArray()
             for (j in i until minOf(i + CHUNK, records.length())) chunk.put(records.get(j))
-            sent += post(prefs, chunk)
+            sent += post(prefs, chunk, trigger)
             i += CHUNK
         }
         prefs.lastSync = now
+        if (backfill) prefs.calcVersion = CALC_VERSION
         val missing = HealthReader.READ_PERMISSIONS.count { it !in granted }
         val note = if (missing > 0) " ($missing type(s) non autorisé(s))" else ""
         return SyncResult.Ok("$sent enregistrements envoyés depuis le ${from.atZone(ZoneId.systemDefault()).toLocalDate()}$note")
     }
 
-    private suspend fun post(prefs: Prefs, records: JSONArray): Int = withContext(Dispatchers.IO) {
+    private suspend fun post(prefs: Prefs, records: JSONArray, trigger: Trigger): Int = withContext(Dispatchers.IO) {
         val body = JSONObject().put("records", records).toString().toByteArray(Charsets.UTF_8)
         val conn = URL("${prefs.serverUrl}/ingest").openConnection() as HttpURLConnection
         try {
@@ -96,7 +108,7 @@ object Sync {
             conn.instanceFollowRedirects = false
             conn.setRequestProperty("Authorization", "Bearer ${prefs.token}")
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("User-Agent", "SanteSync/${BuildConfigCompat.VERSION} (Android ${Build.VERSION.RELEASE})")
+            conn.setRequestProperty("User-Agent", userAgent(trigger.label))
             conn.setFixedLengthStreamingMode(body.size)
             conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
@@ -108,9 +120,4 @@ object Sync {
             conn.disconnect()
         }
     }
-}
-
-/** Évite d'activer buildConfig juste pour la version. */
-object BuildConfigCompat {
-    const val VERSION = "0.1.0"
 }

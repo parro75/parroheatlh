@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import java.time.Instant
 
-/** Réglages et état de synchro, dans le stockage privé de l'appli (allowBackup=false). */
+/** Réglages et état de synchro, dans le stockage privé de l'appli (sauvegarde et transfert exclus). */
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("santesync", Context.MODE_PRIVATE)
 
@@ -24,6 +24,11 @@ class Prefs(context: Context) {
     var lastStatus: String
         get() = sp.getString("last_status", "") ?: ""
         set(v) = sp.edit { putString("last_status", v) }
+
+    /** Version du calcul local déjà appliquée à tout l'historique (voir Sync.CALC_VERSION). */
+    var calcVersion: Int
+        get() = sp.getInt("calc_version", 0)
+        set(v) = sp.edit { putInt("calc_version", v) }
 
     val isConfigured: Boolean
         get() = serverUrl.startsWith("https://") && token.length >= 32
