@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import os
 import json
 import logging
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, queries, report, syncwatch
+from . import __version__, config, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -181,6 +182,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     )
     reports = report.ReportStore(settings.db_path)
     watch = syncwatch.SyncWatch(settings.db_path)
+
+    def run_import(path: str) -> dict[str, Any]:
+        res = samsung_export.run(store, path)
+        log.info("import d'export (téléphone) : %d enregistrements écrits", sum(w for _, w in res.values()))
+        return {k: {"candidates": c, "written": w} for k, (c, w) in res.items()}
+
+    exports = uploads.Uploads(settings.db_path, os.path.join(os.path.dirname(settings.db_path), "uploads"), run_import)
     mcp = build_mcp(store, settings, provider, reports)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
@@ -203,6 +211,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         provider.close()
         reports.close()
         watch.close()
+        exports.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -317,12 +326,57 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         watch.ack(action, last)
         return JSONResponse({"ack": action})
 
+    @app.get("/api/v1/report-job/export-reminder")
+    async def export_reminder(request: Request) -> JSONResponse:
+        require_report_token(request)
+        last = store.last_ingest_from(samsung_export.CLIENT)
+        return JSONResponse(watch.export_reminder(last, syncwatch.now_utc(), settings.tz), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/export-reminder/ack")
+    async def export_reminder_ack(request: Request) -> JSONResponse:
+        require_report_token(request)
+        watch.ack_reminder(syncwatch.now_utc())
+        return JSONResponse({"ack": "export_reminder"})
+
     @app.post("/api/v1/report-job/notified")
     async def report_notified(request: Request) -> JSONResponse:
         require_report_token(request)
         d = str((await request.json()).get("date", ""))
         reports.mark_notified(d)
         return JSONResponse({"notified": d})
+
+    # ---- envoi d'un export Samsung Health par le téléphone (jeton d'ingestion, par morceaux) ---------
+    def require_ingest(request: Request) -> None:
+        if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    def upload_call(fn, *args):
+        try:
+            return JSONResponse(fn(*args), headers={"Cache-Control": "no-store"})
+        except uploads.UploadError as exc:
+            raise HTTPException(status_code=409 if "déjà" in str(exc) else 422, detail=str(exc)) from None
+
+    @app.post("/ingest-export/start")
+    async def export_start(request: Request) -> JSONResponse:
+        require_ingest(request)
+        b = await request.json()
+        return await run_in_threadpool(upload_call, exports.start, int(b.get("size", 0)), str(b.get("sha256", "")).lower())
+
+    @app.put("/ingest-export/{uid}/{index}")
+    async def export_chunk(uid: str, index: int, request: Request) -> JSONResponse:
+        require_ingest(request)
+        data = await request.body()
+        return await run_in_threadpool(upload_call, exports.put, uid, index, data)
+
+    @app.post("/ingest-export/{uid}/finish")
+    async def export_finish(uid: str, request: Request) -> JSONResponse:
+        require_ingest(request)
+        return await run_in_threadpool(upload_call, exports.finish, uid)
+
+    @app.get("/ingest-export/{uid}")
+    async def export_status(uid: str, request: Request) -> JSONResponse:
+        require_ingest(request)
+        return await run_in_threadpool(upload_call, exports.status, uid)
 
     @app.post("/ingest")
     async def ingest(request: Request) -> JSONResponse:

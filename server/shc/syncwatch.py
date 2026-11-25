@@ -55,6 +55,26 @@ class SyncWatch:
                     "message": "Le téléphone envoie de nouveau ses données."}
         return {**out, "action": "none"}
 
+    REMINDER_DAYS = 30
+    REMINDER_HOURS = range(10, 20)
+
+    def export_reminder(self, last_export: str | None, now: datetime, tz: tzinfo) -> dict[str, Any]:
+        """Rappel d'export Samsung Health : une fois tous les 30 jours si le dernier import a plus de 30 jours."""
+        age_days = None if last_export is None else (now - datetime.fromisoformat(last_export)).total_seconds() / 86400
+        last_sent = self._get("export_reminder_at")
+        since_sent = None if last_sent is None else (now - datetime.fromisoformat(last_sent)).total_seconds() / 86400
+        due = (age_days is None or age_days >= self.REMINDER_DAYS) and (since_sent is None or since_sent >= self.REMINDER_DAYS)
+        if not due or now.astimezone(tz).hour not in self.REMINDER_HOURS:
+            return {"action": "none", "export_age_days": None if age_days is None else round(age_days, 1)}
+        return {"action": "export_reminder", "export_age_days": None if age_days is None else round(age_days),
+                "title": "Parro Health — export Samsung à faire",
+                "message": "Samsung Health → Réglages → Télécharger les données personnelles ; dans Mes fichiers, "
+                           "appui long sur le dossier → Compresser, puis partager le zip vers Parro Health. "
+                           "La HRV et les scores resteront à jour."}
+
+    def ack_reminder(self, now: datetime) -> None:
+        self._set("export_reminder_at", now.isoformat())
+
     def ack(self, action: str, last_sync: str) -> None:
         if action == "alert":
             self._set("alerted_for", last_sync)

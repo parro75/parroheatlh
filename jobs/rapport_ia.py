@@ -100,11 +100,16 @@ def watch(env: dict) -> int:
     s = http("GET", f"{base}/api/v1/report-job/sync-status", headers=auth)
     if s["action"] == "none":
         print(f"synchro : âge {s.get('age_hours')} h, rien à signaler")
-        return 0
-    http("POST", env["HA_WEBHOOK_URL"], {"title": s["title"], "message": s["message"]})
-    http("POST", f"{base}/api/v1/report-job/sync-status/ack",
-         {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
-    print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
+    else:
+        http("POST", env["HA_WEBHOOK_URL"], {"title": s["title"], "message": s["message"]})
+        http("POST", f"{base}/api/v1/report-job/sync-status/ack",
+             {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
+        print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
+    r = http("GET", f"{base}/api/v1/report-job/export-reminder", headers=auth)
+    if r["action"] == "export_reminder":
+        http("POST", env["HA_WEBHOOK_URL"], {"title": r["title"], "message": r["message"]})
+        http("POST", f"{base}/api/v1/report-job/export-reminder/ack", {}, auth)
+        print(f"rappel d'export relayé (dernier import il y a {r.get('export_age_days')} j)")
     return 0
 
 

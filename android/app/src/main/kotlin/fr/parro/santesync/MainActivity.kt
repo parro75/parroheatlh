@@ -21,6 +21,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import fr.parro.santesync.ui.DiagnosticScreen
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -70,6 +72,8 @@ private enum class Tab(val title: String, val icon: ImageVector) {
 
 class MainActivity : FragmentActivity() {
     private lateinit var requestPermissions: ActivityResultLauncher<Set<String>>
+    private lateinit var pickZip: ActivityResultLauncher<Array<String>>
+    private lateinit var askNotifications: ActivityResultLauncher<String>
     private var resumeTick by mutableIntStateOf(0)
     private var showDiagnostic by mutableStateOf(false)
 
@@ -110,6 +114,16 @@ class MainActivity : FragmentActivity() {
         requestPermissions = registerForActivityResult(PermissionController.createRequestPermissionResultContract()) {
             resumeTick++
         }
+        askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+        pickZip = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                lifecycleScope.launch {
+                    val err = ExportUpload.enqueue(applicationContext, uri)
+                    Toast.makeText(this@MainActivity, err ?: "Envoi au serveur en cours (voir la notification)", Toast.LENGTH_LONG).show()
+                    resumeTick++
+                }
+            }
+        }
         val actions = SettingsActions(
             requestHealthPermissions = {
                 requestPermissions.launch(HealthReader.wantedPermissions(HealthConnectClient.getOrCreate(this)))
@@ -121,6 +135,10 @@ class MainActivity : FragmentActivity() {
             toast = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
             openDiagnostic = { showDiagnostic = true },
             confirmBiometric = { cb -> authenticate("Activer le verrouillage", cb) },
+            pickExportZip = {
+                if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                pickZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+            },
         )
         // Planifie les synchros (horaire + matin) à chaque ouverture : rattrape les installations existantes.
         if (Prefs(this).isConfigured) SyncWorker.schedule(this)

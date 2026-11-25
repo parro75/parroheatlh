@@ -53,6 +53,7 @@ class SettingsActions(
     val openDiagnostic: () -> Unit,
     /** Vérifie la biométrie avant d'activer le verrouillage ; appelle onResult(true) si réussi. */
     val confirmBiometric: (onResult: (Boolean) -> Unit) -> Unit,
+    val pickExportZip: () -> Unit,
 )
 
 private fun fmt(ms: Long): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -123,6 +124,16 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
                         actions.openHealthConnectInstall() else actions.requestHealthPermissions()
                 }) { Text("Autoriser") }
                 OutlinedButton(onClick = actions.openDiagnostic) { Text("Diagnostic") }
+            }
+        }
+        Section("Export Samsung Health (HRV, scores, historique)") {
+            Text("Samsung Health → Réglages → Télécharger les données personnelles. Dans Mes fichiers, appui long " +
+                "sur le dossier → Compresser, puis « Partager » le zip vers Parro Health, ou choisis-le ici.",
+                style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = actions.pickExportZip) { Text("Choisir un zip d'export") }
+            fr.parro.santesync.ExportUpload.status(ctx).takeIf { it.isNotEmpty() }?.let {
+                Spacer(Modifier.height(6.dp)); Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
         Section("Confidentialité") {
