@@ -24,6 +24,8 @@ class Settings:
     allowed_origins: list[str] = field(default_factory=list)
     app_client_id: str = "parro-health-android"
     app_redirect_uri: str = "fr.parro.health://oauth/callback"
+    report_token: str = ""  # job de rédaction (machine Ollama) : lit le bilan du jour, dépose le texte ; rien d'autre
+    report_deadline_hour: int = 12  # sans nuit reçue à cette heure, le rapport part quand même
 
     @property
     def mcp_path(self) -> str:
@@ -63,4 +65,13 @@ def load() -> Settings:
         allowed_origins=_csv("MCP_ALLOWED_ORIGINS", "https://claude.ai,https://claude.com"),
         app_client_id=os.environ.get("APP_CLIENT_ID", "parro-health-android"),
         app_redirect_uri=os.environ.get("APP_REDIRECT_URI", "fr.parro.health://oauth/callback"),
+        report_token=_report_token(ingest),
+        report_deadline_hour=int(os.environ.get("REPORT_DEADLINE_HOUR", "12")),
     )
+
+
+def _report_token(ingest: str) -> str:
+    tok = os.environ.get("REPORT_TOKEN", "")
+    if tok and (len(tok) < MIN_SECRET_LEN or tok == ingest):
+        raise SystemExit("REPORT_TOKEN trop court ou identique à INGEST_TOKEN")
+    return tok

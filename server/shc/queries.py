@@ -32,6 +32,11 @@ def date_range(start: str | None, end: str | None, today: date) -> tuple[date, d
     return d_start, d_end
 
 
+def hm_text(minutes: float) -> str:
+    m = round(minutes)
+    return f"{m // 60} h {m % 60:02d}"
+
+
 def _hhmm(iso: str | None) -> str | None:
     return datetime.fromisoformat(iso).strftime("%H:%M") if iso else None
 

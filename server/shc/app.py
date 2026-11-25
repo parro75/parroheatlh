@@ -21,7 +21,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, queries
+from . import __version__, config, queries, report
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -44,7 +44,8 @@ DateArg = Annotated[str | None, Field(description="AAAA-MM-JJ (inclus)", pattern
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
-def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider) -> MCPServer:
+def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider,
+              reports: report.ReportStore) -> MCPServer:
     mcp = MCPServer(
         name="samsung-health",
         version=__version__,
@@ -144,6 +145,13 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
             raise ToolError(str(exc)) from exc
 
     @mcp.tool(annotations=READ_ONLY)
+    def get_daily_report(day: DateArg = None) -> dict[str, Any]:
+        """Bilan du jour (nuit, FC au repos, HRV, activité d'hier, SpO2) comparé aux moyennes personnelles,
+        avec les signaux calculés par règles et le texte rédigé chaque matin par l'IA locale."""
+        d = queries.date_range(day, day, datetime.now(settings.tz).date())[0] if day else datetime.now(settings.tz).date()
+        return {"facts": report.facts(store, d), **(reports.get(d.isoformat()) or {})}
+
+    @mcp.tool(annotations=READ_ONLY)
     def get_sync_status() -> dict[str, Any]:
         """Dernière synchronisation reçue du téléphone et, par type de donnée, nombre d'enregistrements
         et premier/dernier jour couverts."""
@@ -171,7 +179,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             scope=SCOPE,
         )],
     )
-    mcp = build_mcp(store, settings, provider)
+    reports = report.ReportStore(settings.db_path)
+    mcp = build_mcp(store, settings, provider, reports)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
         allowed_hosts=settings.allowed_hosts,
@@ -191,6 +200,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             yield
         store.close()
         provider.close()
+        reports.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -225,6 +235,10 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         try:
             if name == "today":
                 data = await run_in_threadpool(queries.today, store, today)
+            elif name == "report":
+                d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
+                f = await run_in_threadpool(report.facts, store, d)
+                data = {"facts": f, **(reports.get(d.isoformat()) or {})}
             elif name == "status":
                 data = {"timezone": str(settings.tz), **await run_in_threadpool(store.status)}
             elif name == "trends":
@@ -239,6 +253,54 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except queries.QueryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+    # ---- job de rédaction du rapport (machine Ollama) : jeton dédié, 3 routes seulement ---------------------
+    report_auth = f"Bearer {settings.report_token}".encode() if settings.report_token else None
+
+    def require_report_token(request: Request) -> None:
+        if report_auth is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not hmac.compare_digest(request.headers.get("authorization", "").encode(), report_auth):
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    @app.get("/api/v1/report-job/pending")
+    async def report_pending(request: Request) -> JSONResponse:
+        require_report_token(request)
+        now = datetime.now(settings.tz)
+        d = now.date()
+        f = await run_in_threadpool(report.facts, store, d)
+        saved = reports.get(d.isoformat()) or {}
+        return JSONResponse({
+            "date": d.isoformat(),
+            "ready": f["ready"] or now.hour >= settings.report_deadline_hour,
+            "has_narrative": bool(saved.get("narrative")),
+            "notified": bool(saved.get("notified_at")),
+            "narrative": saved.get("narrative"),
+            "fallback": report.fallback_text(f),
+            "facts": f,
+        }, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/narrative")
+    async def report_narrative(request: Request) -> JSONResponse:
+        require_report_token(request)
+        body = await request.json()
+        d, text, model = str(body.get("date", "")), str(body.get("narrative", "")).strip(), str(body.get("model", ""))[:80]
+        try:
+            datetime.strptime(d, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date AAAA-MM-JJ attendue") from None
+        if not text or len(text) > 4000:
+            raise HTTPException(status_code=422, detail="texte vide ou trop long (4000 car. max)")
+        reports.save_narrative(d, text, model)
+        log.info("rapport du %s rédigé (%s, %d car.)", d, model, len(text))
+        return JSONResponse({"saved": d})
+
+    @app.post("/api/v1/report-job/notified")
+    async def report_notified(request: Request) -> JSONResponse:
+        require_report_token(request)
+        d = str((await request.json()).get("date", ""))
+        reports.mark_notified(d)
+        return JSONResponse({"notified": d})
 
     @app.post("/ingest")
     async def ingest(request: Request) -> JSONResponse:
