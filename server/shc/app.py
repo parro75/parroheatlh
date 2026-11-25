@@ -1,4 +1,4 @@
-"""Application unique : POST /ingest (téléphone) + MCP streamable HTTP sur /mcp/<secret> (Claude)."""
+"""Application unique : POST /ingest (téléphone, jeton fixe) + MCP streamable HTTP sur /mcp (Claude, OAuth)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -20,6 +21,7 @@ from mcp_types import ToolAnnotations
 from pydantic import Field
 
 from . import __version__, config, queries
+from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
 log = logging.getLogger("shc")
@@ -39,8 +41,25 @@ DateArg = Annotated[str | None, Field(description="AAAA-MM-JJ (inclus)", pattern
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
-def build_mcp(store: Store, settings: config.Settings) -> MCPServer:
-    mcp = MCPServer(name="samsung-health", version=__version__, instructions=INSTRUCTIONS)
+def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider) -> MCPServer:
+    mcp = MCPServer(
+        name="samsung-health",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        auth_server_provider=provider,
+        auth=AuthSettings(
+            issuer_url=settings.public_url,
+            resource_server_url=settings.resource_url,
+            validate_token_resource=True,
+            required_scopes=[SCOPE],
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True, valid_scopes=[SCOPE], default_scopes=[SCOPE]
+            ),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+    )
+    mcp.custom_route("/login", methods=["GET"], include_in_schema=False)(provider.login_get)
+    mcp.custom_route("/login", methods=["POST"], include_in_schema=False)(provider.login_post)
 
     def run(fn: Callable[..., dict[str, Any]], start: str | None, end: str | None) -> dict[str, Any]:
         today = datetime.now(settings.tz).date()
@@ -98,7 +117,14 @@ def build_mcp(store: Store, settings: config.Settings) -> MCPServer:
 def create_app(settings: config.Settings | None = None) -> FastAPI:
     settings = settings or config.load()
     store = Store(settings.db_path, settings.tz)
-    mcp = build_mcp(store, settings)
+    provider = HealthOAuthProvider(
+        settings.db_path,
+        public_url=settings.public_url,
+        resource_url=settings.resource_url,
+        owner=OwnerAuth(settings.owner_password_hash, settings.totp_secret),
+        redirect_allowlist=settings.redirect_uris,
+    )
+    mcp = build_mcp(store, settings, provider)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
         allowed_hosts=settings.allowed_hosts,
@@ -117,10 +143,12 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         async with mcp_app.router.lifespan_context(mcp_app):
             yield
         store.close()
+        provider.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
+    app.state.oauth = provider
     expected = f"Bearer {settings.ingest_token}".encode()
 
     @app.get("/healthz")
@@ -154,6 +182,6 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         log.info("ingest: %d enregistrements", n)
         return JSONResponse({"accepted": n})
 
-    # Tout le reste (dont /mcp/<secret>) part vers l'application MCP ; un mauvais chemin = 404.
+    # Tout le reste (MCP, OAuth, /login) part vers l'application MCP ; un chemin inconnu = 404.
     app.mount("/", mcp_app)
     return app

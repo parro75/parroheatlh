@@ -1,15 +1,43 @@
+# Connecteur Samsung Health (dépôt parro75/parroheatlh). Données de santé RÉELLES :
+# surface minimale, aucun accès sortant, rien de publié.
 services:
   shc:
     build: .
-    image: samsung-health-connector:0.1.0
-    container_name: samsung-health-connector
+    image: shc:0.2.0
+    container_name: shc
     restart: unless-stopped
-    env_file: .env
+    user: "10001:10001"
+    env_file: .env          # mode 600 : INGEST_TOKEN, OWNER_PASSWORD_HASH, TOTP_SECRET, PUBLIC_URL
+
+    # Réseau INTERNE dédié (comme cookcli) : ni route par défaut ni masquerade.
+    # Le conteneur ne peut joindre ni Internet, ni l'hôte, ni les autres réseaux Docker.
+    # Aucun port publié : Caddy (réseau hôte) vise directement l'IP fixe ci-dessous.
+    networks:
+      sante:
+        ipv4_address: 172.26.0.2
+
+    # Base SQLite HORS de /opt : elle n'entre pas dans la sauvegarde nocturne en clair
+    # (décision du 25/11/2026 — en cas de perte, réimport depuis le téléphone).
     volumes:
-      - ./data:/data          # chown 10001 ./data avant le premier démarrage
-    ports:
-      - "127.0.0.1:8080:8080" # derrière le reverse proxy HTTPS, jamais exposé tel quel
+      - /var/lib/sante:/data
+
     read_only: true
-    tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+
+networks:
+  sante:
+    driver: bridge
+    internal: true
+    driver_opts:
+      # Nom fixe : /etc/init.d/firewall autorise OUTPUT -o br-sante (Caddy -> conteneur).
+      com.docker.network.bridge.name: br-sante
+    ipam:
+      config:
+        - subnet: 172.26.0.0/24
+          gateway: 172.26.0.1

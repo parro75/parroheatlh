@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from conftest import AUTH, MCP_SECRET, sample_records
+from conftest import AUTH, sample_records
 
 
 def test_healthz(client):
@@ -72,8 +72,5 @@ def test_local_date_rules(client):
     assert [r.id for r in store.fetch("weight", d20, d20)] == ["w"]
 
 
-def test_unknown_paths_are_404(client):
-    assert client.post("/mcp", json={}).status_code == 404
-    assert client.post("/mcp/wrong-secret", json={}).status_code == 404
-    assert client.get("/docs").status_code == 404
-    assert MCP_SECRET  # le bon chemin est testé de bout en bout dans test_mcp_e2e.py
+def test_mcp_without_token_is_401(client):
+    assert client.post("/mcp", json={}).status_code == 401

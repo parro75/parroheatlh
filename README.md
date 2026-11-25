@@ -11,7 +11,7 @@ Galaxy Watch ─► Samsung Health ─► Health Connect (téléphone)
                                         │  POST /ingest  (HTTPS + Bearer INGEST_TOKEN)
                                         ▼
                   serveur shc (server/) : FastAPI + SQLite + MCP
-                                        │  /mcp/<MCP_PATH_SECRET>  (streamable HTTP, sans état)
+                                        │  /mcp  (streamable HTTP, sans état, jeton OAuth)
                                         ▼
                          Claude (connecteur personnalisé)
 ```
@@ -23,11 +23,27 @@ Python 3.13, SDK MCP officiel **v2** (`mcp==2.3.0`, `MCPServer`), FastAPI, SQLit
 | Route | Rôle | Protection |
 |---|---|---|
 | `POST /ingest` | reçoit les lots du téléphone | `Authorization: Bearer <INGEST_TOKEN>` |
-| `/mcp/<MCP_PATH_SECRET>` | MCP streamable HTTP (réponses JSON, sans état) | chemin secret + `Host`/`Origin` vérifiés |
+| `/mcp` | MCP streamable HTTP (réponses JSON, sans état) | jeton OAuth (portée `health:read`) + `Host`/`Origin` vérifiés |
+| `/.well-known/…`, `/register`, `/token`, `/revoke` | serveur d'autorisation OAuth 2.1 (SDK MCP) | PKCE S256 obligatoire |
+| `/authorize`, `/login` | connexion du propriétaire | mot de passe (scrypt) + TOTP |
 | `GET /healthz` | sonde | aucune donnée |
 | tout le reste | 404 | — |
 
-Aucun journal d'accès (le chemin MCP contient le secret).
+### Sécurité
+
+- **Un seul utilisateur** : le propriétaire des données. `/login` exige le mot de passe **et** un code
+  TOTP ; un code déjà utilisé est refusé (anti-rejeu) ; 5 échecs = connexion verrouillée 15 min.
+- **Clients** : enregistrement dynamique (DCR) accepté **seulement** avec une URL de retour de la liste
+  blanche (`claude.ai` / `claude.com`) ; au plus 50 clients.
+- **Jetons** : accès 1 h, rafraîchissement 30 j à rotation ; rejouer un jeton de rafraîchissement déjà
+  utilisé révoque toute la famille. Codes et jetons ne sont stockés que **hachés** (SHA-256).
+  `python -m shc.admin revoke-all` coupe tout.
+- **Jeton d'ingestion** distinct : il n'ouvre pas le MCP, et un jeton OAuth n'ouvre pas `/ingest`.
+- **Page de connexion** : CSP stricte (`frame-ancestors 'none'`, `form-action` limité), `no-store`.
+- **Déploiement** (voir `deploy/`) : conteneur en lecture seule, sans capability, non root, sur un réseau
+  Docker `internal` (aucun accès sortant) ; le reverse proxy n'ouvre les routes serveur à serveur
+  qu'aux IP sortantes publiées par Anthropic et répond 404 à tout le reste.
+- Aucun journal d'accès applicatif.
 
 ### Outils MCP (lecture seule)
 
@@ -56,32 +72,27 @@ message). Horodatage sans décalage = refusé.
 
 ```sh
 cd server
-cp .env.example .env    # remplir les deux secrets (différents, 32+ caractères) et MCP_ALLOWED_HOSTS
-mkdir -p data && chown 10001 data
-docker compose up -d --build
+grep -v '=a-remplacer' .env.example > .env && chmod 600 .env   # puis régler PUBLIC_URL
+docker compose build
+docker compose run --rm -T shc python -m shc.admin init >> .env   # mot de passe lu sur stdin
+install -d -o 10001 -g 10001 -m 700 /var/lib/sante
+docker compose up -d
 ```
 
-Le conteneur écoute sur `127.0.0.1:8080` ; il faut un reverse proxy HTTPS devant, par exemple Caddy :
-
-```
-sante.example.org {
-    reverse_proxy 127.0.0.1:8080
-}
-```
-
-Claude (claude.ai) appelle le connecteur **depuis Internet** : le nom doit être public. Le téléphone,
-lui, doit pouvoir joindre `/ingest` (en 5G aussi si l'on veut des synchros hors de la maison).
+Puis le bloc `deploy/Caddyfile.sante` dans le reverse proxy, et autoriser le trafic de l'hôte vers le
+pont `br-sante` si la chaîne `OUTPUT` est en `DROP`. L'URI TOTP à enregistrer dans l'appli
+d'authentification : `docker compose run --rm shc python -m shc.admin totp-uri`.
 
 ### Brancher dans Claude
 
-Réglages → Connecteurs → *Ajouter un connecteur personnalisé* → URL
-`https://sante.example.org/mcp/<MCP_PATH_SECRET>`. Pas d'OAuth en v1 : le chemin est le secret.
+Réglages → Connecteurs → *Ajouter un connecteur personnalisé* → URL `https://sante.example.org/mcp`.
+Claude ouvre la page de connexion : mot de passe + code TOTP, puis *Autoriser*.
 
 ### Tests
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q     # ingestion, idempotence, rejet atomique, dates locales, MCP de bout en bout
+python -m pytest -q     # ingestion, OAuth (chaque garde-fou), MCP de bout en bout avec jeton
 ```
 
 ## App Android (`android/`)

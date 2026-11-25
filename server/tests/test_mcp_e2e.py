@@ -1,45 +1,21 @@
-"""De bout en bout : vrai serveur uvicorn sur un port libre, vrai client MCP streamable HTTP."""
+"""De bout en bout : vrai serveur, parcours OAuth complet, vrai client MCP streamable HTTP avec jeton."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import socket
-import threading
-import time
 
 import httpx
-import pytest
-import uvicorn
+import httpx2
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
-from conftest import AUTH, MCP_SECRET, sample_records
-from shc.app import create_app
+from conftest import AUTH, full_login, sample_records
 
 EXPECTED_TOOLS = {
     "get_daily_steps", "get_sleep", "get_heart_rate", "get_hrv", "get_body_measurements",
     "get_spo2", "get_workouts", "get_sync_status",
 }
-
-
-@pytest.fixture
-def live_server(settings):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            if httpx.get(f"{base}/healthz").status_code == 200:
-                break
-        except httpx.HTTPError:
-            time.sleep(0.05)
-    yield base
-    server.should_exit = True
-    thread.join(timeout=5)
 
 
 def _payload(result) -> dict:
@@ -49,19 +25,17 @@ def _payload(result) -> dict:
     return json.loads(result.content[0].text)
 
 
-async def _session(url: str):
-    async with Client(url) as client:
+async def _session(url: str, token: str):
+    http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    async with http, Client(streamable_http_client(url, http_client=http)) as client:
         tools = await client.list_tools()
-        names = {t.name for t in tools.tools}
-        out = {"tools": names, "ro": all(t.annotations and t.annotations.read_only_hint for t in tools.tools)}
+        out = {"tools": {t.name for t in tools.tools},
+               "ro": all(t.annotations and t.annotations.read_only_hint for t in tools.tools)}
         w = {"start": "2026-11-23", "end": "2026-11-24"}
-        out["sleep"] = _payload(await client.call_tool("get_sleep", w))
-        out["steps"] = _payload(await client.call_tool("get_daily_steps", w))
-        out["hr"] = _payload(await client.call_tool("get_heart_rate", w))
-        out["hrv"] = _payload(await client.call_tool("get_hrv", w))
-        out["body"] = _payload(await client.call_tool("get_body_measurements", w))
-        out["spo2"] = _payload(await client.call_tool("get_spo2", w))
-        out["workouts"] = _payload(await client.call_tool("get_workouts", w))
+        for key, tool in (("sleep", "get_sleep"), ("steps", "get_daily_steps"), ("hr", "get_heart_rate"),
+                          ("hrv", "get_hrv"), ("body", "get_body_measurements"), ("spo2", "get_spo2"),
+                          ("workouts", "get_workouts")):
+            out[key] = _payload(await client.call_tool(tool, w))
         out["status"] = _payload(await client.call_tool("get_sync_status", {}))
         out["bad"] = await client.call_tool("get_sleep", {"start": "2026-11-24", "end": "2026-11-01"})
         out["toolong"] = await client.call_tool("get_sleep", {"start": "2024-01-01", "end": "2026-11-24"})
@@ -69,10 +43,13 @@ async def _session(url: str):
 
 
 def test_mcp_end_to_end(live_server):
-    r = httpx.post(f"{live_server}/ingest", json={"records": sample_records()}, headers=AUTH)
+    base, app = live_server
+    r = httpx.post(f"{base}/ingest", json={"records": sample_records()}, headers=AUTH)
     assert r.status_code == 200, r.text
 
-    out = asyncio.run(_session(f"{live_server}/mcp/{MCP_SECRET}"))
+    with httpx.Client(base_url=base) as http:
+        tokens = full_login(http, app, base)
+    out = asyncio.run(_session(f"{base}/mcp", tokens["access_token"]))
 
     assert out["tools"] == EXPECTED_TOOLS
     assert out["ro"]
@@ -102,8 +79,15 @@ def test_mcp_end_to_end(live_server):
     assert out["toolong"].is_error
 
 
-def test_mcp_wrong_secret_is_rejected(live_server):
+def test_mcp_requires_valid_token(live_server):
+    base, _ = live_server
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
     hdr = {"Accept": "application/json, text/event-stream"}
-    assert httpx.post(f"{live_server}/mcp/{'x' * 40}", json=body, headers=hdr).status_code == 404
-    assert httpx.post(f"{live_server}/mcp", json=body, headers=hdr).status_code == 404
+    r = httpx.post(f"{base}/mcp", json=body, headers=hdr)
+    assert r.status_code == 401
+    assert "resource_metadata" in r.headers.get("www-authenticate", "")
+    r = httpx.post(f"{base}/mcp", json=body, headers={**hdr, "Authorization": "Bearer faux"})
+    assert r.status_code == 401
+    # Le jeton d'ingestion du téléphone n'ouvre PAS le MCP.
+    r = httpx.post(f"{base}/mcp", json=body, headers={**hdr, **AUTH})
+    assert r.status_code == 401
