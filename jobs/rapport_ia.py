@@ -163,12 +163,16 @@ def weekly(env: dict, base: str, auth: dict) -> None:
             text, model = p["fallback"], "secours (sans IA)"
         http("POST", f"{base}/api/v1/report-job/narrative", {"date": key, "narrative": text, "model": model}, auth)
     if not p["notified"]:
-        flags = p["facts"].get("flags", [])
-        title = "Rapport de la semaine" + (" — à noter" if any(x["level"] == "attention" for x in flags) else "")
-        message = text if text.strip() == p["fallback"].strip() else with_flags(text, flags)  # le secours a déjà ses signaux
-        http("POST", env["HA_WEBHOOK_URL"], {"title": title, "message": message})
+        notify(env, "Ton rapport de la semaine est prêt")
         http("POST", f"{base}/api/v1/report-job/notified", {"date": key}, auth)
     print(f"{key} : rapport de la semaine traité ({len(text)} car.)")
+
+
+def notify(env: dict, message: str) -> None:
+    """Notification SANS contenu de santé (25/11/2026) : hors Wi-Fi, elle passe par Firebase (Google), et HA
+    garde les données du déclencheur dans ses traces. Le texte du rapport se lit dans Parro Health (HTTPS vers
+    sante.example.org) ; HA ouvre l'app au toucher."""
+    http("POST", env["HA_WEBHOOK_URL"], {"title": "Parro Health", "message": message})
 
 
 def watch(env: dict) -> int:
@@ -227,10 +231,7 @@ def main() -> int:
         http("POST", f"{base}/api/v1/report-job/narrative", {"date": day, "narrative": text, "model": model}, auth)
         print(f"{day} : texte enregistré ({model}, {len(text)} car.)")
     if not p["notified"] and env.get("HA_WEBHOOK_URL"):
-        flags = p["facts"].get("flags", [])
-        title = "Rapport santé" + (" — à noter" if any(x["level"] == "attention" for x in flags) else "")
-        message = text if text.strip() == p["fallback"].strip() else with_flags(text, flags)  # le secours a déjà ses signaux
-        http("POST", env["HA_WEBHOOK_URL"], {"title": title, "message": message})
+        notify(env, "Ton rapport est prêt")
         http("POST", f"{base}/api/v1/report-job/notified", {"date": day}, auth)
         print(f"{day} : notification envoyée")
     return 0
