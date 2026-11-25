@@ -115,6 +115,9 @@ class MainActivity : FragmentActivity() {
             resumeTick++
         }
         askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+        // Les rapports sont annoncés par l'appli elle-même : demander l'autorisation dès l'ouverture.
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         pickZip = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) {
                 lifecycleScope.launch {

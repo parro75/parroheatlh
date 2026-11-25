@@ -49,6 +49,15 @@ class Prefs(context: Context) {
         set(v) = sp.edit { putBoolean("goals_pending", v) }
 
     /** Dernier résumé « today » du serveur, pour le widget (rien d'affiché si l'app est verrouillée). */
+    /** Dernier rapport (jour « AAAA-MM-JJ », semaine « SAAAA-Wnn ») déjà annoncé par une notification. */
+    var notifiedDay: String
+        get() = sp.getString("notified_day", "") ?: ""
+        set(v) = sp.edit { putString("notified_day", v) }
+
+    var notifiedWeek: String
+        get() = sp.getString("notified_week", "") ?: ""
+        set(v) = sp.edit { putString("notified_week", v) }
+
     var widgetSummary: String
         get() = sp.getString("widget_summary", "") ?: ""
         set(v) = sp.edit { putString("widget_summary", v) }

@@ -112,6 +112,7 @@ object Sync {
         if (goalsSent) prefs.goalsPending = false
         prefs.changesToken = nextToken // seulement après un envoi réussi
         Widget.refresh(context) // résumé du serveur pour le widget (sans effet si non connecté)
+        ReportNotifier.check(context) // rapport du jour / de la semaine prêt → notification locale (ni HA ni Google)
         prefs.lastSync = now
         if (backfill) prefs.calcVersion = CALC_VERSION
         val missing = HealthReader.READ_PERMISSIONS.count { it !in granted }

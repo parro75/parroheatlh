@@ -7,8 +7,9 @@ Toutes les 10 min entre 4 h et 13 h (timer systemd) :
      le modèle local RÉDIGE à partir des faits ; il ne calcule ni ne juge rien (signaux déjà calculés
      par le serveur). Échec du modèle ou texte suspect → texte de secours fourni par le serveur.
      POST {SANTE_URL}/api/v1/report-job/narrative
-  3. si pas encore notifié : POST au webhook Home Assistant (notification sur le téléphone de Parro),
-     puis POST {SANTE_URL}/api/v1/report-job/notified
+  3. POST {SANTE_URL}/api/v1/report-job/notified (rapport prêt). Depuis le 25/11/2026, c'est l'appli
+     Parro Health qui l'annonce (notification locale après sa synchro) : ni Home Assistant ni Google.
+     Le webhook HA ne sert plus qu'aux alertes de synchro et au rappel d'export (--surveillance).
 
 Configuration : /etc/parro-sante/rapport.env (600) — SANTE_URL, REPORT_TOKEN, OLLAMA_URL, MODEL, HA_WEBHOOK_URL.
 Aucune donnée de santé n'est écrite dans les journaux (seulement des longueurs et des états).
@@ -163,16 +164,16 @@ def weekly(env: dict, base: str, auth: dict) -> None:
             text, model = p["fallback"], "secours (sans IA)"
         http("POST", f"{base}/api/v1/report-job/narrative", {"date": key, "narrative": text, "model": model}, auth)
     if not p["notified"]:
-        notify(env, "Ton rapport de la semaine est prêt")
+        # annonce : par l'appli Parro Health elle-même (notification locale, 25/11/2026)
         http("POST", f"{base}/api/v1/report-job/notified", {"date": key}, auth)
     print(f"{key} : rapport de la semaine traité ({len(text)} car.)")
 
 
-def notify(env: dict, message: str) -> None:
-    """Notification SANS contenu de santé (25/11/2026) : hors Wi-Fi, elle passe par Firebase (Google), et HA
-    garde les données du déclencheur dans ses traces. Le texte du rapport se lit dans Parro Health (HTTPS vers
-    sante.example.org) ; HA ouvre l'app au toucher."""
-    http("POST", env["HA_WEBHOOK_URL"], {"title": "Parro Health", "message": message})
+def notify(env: dict, title: str, message: str) -> None:
+    """Alerte par Home Assistant — SANS donnée de santé (25/11/2026) : seulement l'alerte « plus de synchro »
+    et le rappel d'export, qui doivent justement arriver quand l'appli ne synchronise plus. Les rapports,
+    eux, sont annoncés par l'appli (notification locale : ni HA, ni Google)."""
+    http("POST", env["HA_WEBHOOK_URL"], {"title": title, "message": message})
 
 
 def watch(env: dict) -> int:
@@ -183,14 +184,14 @@ def watch(env: dict) -> int:
     if s["action"] == "none":
         print(f"synchro : âge {s.get('age_hours')} h, rien à signaler")
     else:
-        http("POST", env["HA_WEBHOOK_URL"], {"title": s["title"], "message": s["message"]})
+        notify(env, s["title"], s["message"])
         http("POST", f"{base}/api/v1/report-job/sync-status/ack",
              {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
         print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
     weekly(env, base, auth)
     r = http("GET", f"{base}/api/v1/report-job/export-reminder", headers=auth)
     if r["action"] == "export_reminder":
-        http("POST", env["HA_WEBHOOK_URL"], {"title": r["title"], "message": r["message"]})
+        notify(env, r["title"], r["message"])
         http("POST", f"{base}/api/v1/report-job/export-reminder/ack", {}, auth)
         print(f"rappel d'export relayé (dernier import il y a {r.get('export_age_days')} j)")
     return 0
@@ -230,10 +231,10 @@ def main() -> int:
             text, model = p["fallback"], "secours (sans IA)"
         http("POST", f"{base}/api/v1/report-job/narrative", {"date": day, "narrative": text, "model": model}, auth)
         print(f"{day} : texte enregistré ({model}, {len(text)} car.)")
-    if not p["notified"] and env.get("HA_WEBHOOK_URL"):
-        notify(env, "Ton rapport est prêt")
+    if not p["notified"]:
+        # annonce : par l'appli Parro Health elle-même (notification locale, 25/11/2026)
         http("POST", f"{base}/api/v1/report-job/notified", {"date": day}, auth)
-        print(f"{day} : notification envoyée")
+        print(f"{day} : rapport marqué prêt (l'appli l'annonce à sa prochaine synchro)")
     return 0
 
 

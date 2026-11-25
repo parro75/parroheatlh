@@ -1,5 +1,5 @@
 [Unit]
-Description=Parro Health — rapport santé du matin (rédaction par Ollama, notification via Home Assistant)
+Description=Parro Health — rapport santé du matin (rédaction par Ollama ; annonce par l'appli Parro Health)
 After=network-online.target docker.service
 Wants=network-online.target
 
