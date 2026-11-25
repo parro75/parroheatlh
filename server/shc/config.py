@@ -25,6 +25,7 @@ class Settings:
     app_client_id: str = "parro-health-android"
     app_redirect_uri: str = "fr.parro.health://oauth/callback"
     report_token: str = ""  # job de rédaction (machine Ollama) : lit le bilan du jour, dépose le texte ; rien d'autre
+    ha_token: str = ""  # Home Assistant : lit /api/v1/ha/summary et RIEN d'autre (tableau de bord)
     report_deadline_hour: int = 12  # sans nuit reçue à cette heure, le rapport part quand même
 
     @property
@@ -66,8 +67,16 @@ def load() -> Settings:
         app_client_id=os.environ.get("APP_CLIENT_ID", "parro-health-android"),
         app_redirect_uri=os.environ.get("APP_REDIRECT_URI", "fr.parro.health://oauth/callback"),
         report_token=_report_token(ingest),
+        ha_token=_ha_token(ingest),
         report_deadline_hour=int(os.environ.get("REPORT_DEADLINE_HOUR", "12")),
     )
+
+
+def _ha_token(ingest: str) -> str:
+    tok = os.environ.get("HA_TOKEN", "")
+    if tok and (len(tok) < MIN_SECRET_LEN or tok in (ingest, os.environ.get("REPORT_TOKEN", ""))):
+        raise SystemExit("HA_TOKEN trop court ou identique à un autre jeton")
+    return tok
 
 
 def _report_token(ingest: str) -> str:

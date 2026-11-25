@@ -20,6 +20,7 @@ from shc.security import current_step, hash_password, new_totp_secret, totp_at
 
 INGEST_TOKEN = "i" * 40
 REPORT_TOKEN = "r" * 40
+HA_TOKEN = "h" * 40
 PASSWORD = "correct horse battery staple"
 TOTP_SECRET = new_totp_secret()
 PASSWORD_HASH = hash_password(PASSWORD)
@@ -36,6 +37,7 @@ def make_settings(tmp_path, public_url: str) -> Settings:
         totp_secret=TOTP_SECRET,
         tz=ZoneInfo("America/Toronto"),
         report_token=REPORT_TOKEN,
+        ha_token=HA_TOKEN,
     )
 
 

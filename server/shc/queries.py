@@ -428,7 +428,11 @@ def today(store: Store, day: date) -> dict[str, Any]:
     out: dict[str, Any] = {"date": day.isoformat()}
     nights = sleep(store, day - timedelta(days=1), day)["sessions"]
     if nights:
-        out["last_night"] = max(nights, key=lambda n: n.get("asleep_min") or n.get("in_bed_min") or 0)
+        # la nuit la PLUS RÉCENTE (pas la plus longue des deux jours), et parmi celles de ce jour la plus
+        # longue, pour écarter une sieste. Bug corrigé le 25/11/2026 : on affichait la plus longue des deux.
+        latest = max(n["date"] for n in nights)
+        out["last_night"] = max((n for n in nights if n["date"] == latest),
+                                key=lambda n: n.get("asleep_min") or n.get("in_bed_min") or 0)
     st = store.fetch("steps_daily", day, day)
     out["steps_today"] = st[-1].data.get("count") if st else 0
     week = daily_steps(store, day - timedelta(days=6), day)

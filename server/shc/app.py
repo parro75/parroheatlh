@@ -23,7 +23,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, config, ha, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -289,6 +289,18 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="not found")
         except queries.QueryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
+        return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+    # ---- Home Assistant : jeton dédié, UNE route en lecture (tableau de bord visible par Parro seul) ----
+    ha_auth = f"Bearer {settings.ha_token}".encode() if settings.ha_token else None
+
+    @app.get("/api/v1/ha/summary")
+    async def ha_summary(request: Request) -> JSONResponse:
+        if ha_auth is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not hmac.compare_digest(request.headers.get("authorization", "").encode(), ha_auth):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        data = await run_in_threadpool(ha.summary, store, reports, datetime.now(settings.tz).date())
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
     # ---- job de rédaction du rapport (machine Ollama) : jeton dédié, 3 routes seulement ---------------------

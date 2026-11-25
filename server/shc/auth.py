@@ -280,7 +280,7 @@ class HealthOAuthProvider:
     def _page(self, body: str, status: int = 200) -> HTMLResponse:
         doc = f"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<title>Santé — connexion</title>
+<title>Parro Health — connexion</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:26rem;margin:3rem auto;padding:0 1rem;line-height:1.5}}
 input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;margin:.3rem 0 .9rem}}
 .err{{color:#b00020}} small{{color:#555}}</style></head><body>{body}</body></html>"""
@@ -293,7 +293,7 @@ input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;ma
 
     def _form(self, req_id: str, client_name: str, redirect_host: str, error: str = "") -> HTMLResponse:
         err = f'<p class="err">{html.escape(error)}</p>' if error else ""
-        return self._page(f"""<h1>Données de santé</h1>
+        return self._page(f"""<h1>Parro Health</h1>
 <p><b>{html.escape(client_name)}</b> demande l'accès en <b>lecture</b> à tes données de santé.<br>
 <small>Retour vers : {html.escape(redirect_host)}</small></p>{err}
 <form method="post" action="/login" autocomplete="off">

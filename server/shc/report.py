@@ -17,6 +17,7 @@ from . import queries
 from .db import Store
 
 SHORT_NIGHT_MIN = 6 * 60
+SLEEP_GOAL_TOLERANCE_MIN = 30  # « sous l'objectif » seulement au-delà de 30 min d'écart (décision du 25/11/2026)
 RHR_HIGH_DELTA = 5  # bpm au-dessus de la moyenne 28 j
 RHR_LOW_DELTA = -4
 HRV_LOW_RATIO = 0.8
@@ -76,7 +77,7 @@ def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
             else:
                 flags.append({"level": "attention", "text": f"Nuit courte : {queries.hm_text(a)}"
                               + (f" (moyenne 28 j : {queries.hm_text(mean(hist))})" if hist else "")})
-        elif a is not None and a < g["sleep_min"]:
+        elif a is not None and a < g["sleep_min"] - SLEEP_GOAL_TOLERANCE_MIN:
             flags.append({"level": "info", "text": f"Sous ton objectif de sommeil : {queries.hm_text(a)} "
                                                    f"(objectif {queries.hm_text(g['sleep_min'])})"})
         elif a is not None and len(hist) >= MIN_BASELINE and a >= mean(hist) + 60:

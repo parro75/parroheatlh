@@ -44,7 +44,7 @@ def main(argv: list[str]) -> None:
     elif cmd == "totp-uri":
         secret = os.environ.get("TOTP_SECRET") or raise_(SystemExit("TOTP_SECRET absent"))
         host = os.environ.get("PUBLIC_URL", "sante").split("//")[-1]
-        print(otpauth_uri(secret, account="proprietaire", issuer=f"Santé {host}"))
+        print(otpauth_uri(secret, account="proprietaire", issuer="Parro Health"))
     elif cmd == "revoke-all":
         conn = sqlite3.connect(os.environ.get("DB_PATH", "/data/health.db"), isolation_level=None)
         n = conn.execute("DELETE FROM oauth_tokens").rowcount
