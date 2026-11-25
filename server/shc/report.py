@@ -220,3 +220,86 @@ class ReportStore:
 
 def as_json(f: dict[str, Any]) -> str:
     return json.dumps(f, ensure_ascii=False, separators=(",", ":"))
+
+
+# ---- rapport hebdomadaire ------------------------------------------------------------------------------
+
+WEEK_SHORT_SLEEP_MIN = 6 * 60 + 30
+WAKE_IRREGULAR_MIN = 60
+RHR_WEEK_DELTA = 3
+STEPS_WEEK_RATIO = 0.7
+
+
+def week_bounds(d: date) -> tuple[date, date]:
+    """Semaine (lundi → dimanche) qui contient d."""
+    monday = d - timedelta(days=d.weekday())
+    return monday, monday + timedelta(days=6)
+
+
+def week_key(d: date) -> str:
+    iso = d.isocalendar()
+    return f"S{iso.year}-W{iso.week:02d}"
+
+
+def _period_stats(store: Store, start: date, end: date) -> dict[str, Any]:
+    nights = [n for n in queries.sleep(store, start, end)["sessions"] if (n.get("asleep_min") or n.get("in_bed_min") or 0) >= 180]
+    asleep = [_asleep(n) for n in nights if _asleep(n)]
+    wakes = []
+    for n in nights:
+        if n.get("wake"):
+            h, m = map(int, n["wake"].split(":"))
+            wakes.append(h * 60 + m)
+    scores = [n["score"] for n in nights if n.get("score") is not None]
+    rhr = list(_per_day(store, "resting_heart_rate", "bpm", start, end).values())
+    steps = _per_day(store, "steps_daily", "count", start, end)
+    ws = queries.workouts(store, start, end)["workouts"]
+    stress = list(_per_day(store, "stress_daily", "avg", start, end).values())
+    return {
+        "nights": len(nights),
+        "asleep_avg_min": _r(mean(asleep)) if asleep else None,
+        "wake_avg": f"{round(mean(wakes)) // 60:02d}:{round(mean(wakes)) % 60:02d}" if wakes else None,
+        "wake_sd_min": _r(pstdev(wakes)) if len(wakes) >= 3 else None,
+        "sleep_score_avg": _r(mean(scores)) if scores else None,
+        "resting_hr_avg": _r(mean(rhr), 1) if rhr else None,
+        "steps_avg": _r(mean(steps.values())) if steps else None,
+        "steps_total": int(sum(steps.values())) if steps else None,
+        "workouts": len(ws),
+        "workout_min": _r(sum(w.get("duration_min") or 0 for w in ws)),
+        "stress_avg": _r(mean(stress)) if stress else None,
+    }
+
+
+def weekly_facts(store: Store, d: date) -> dict[str, Any]:
+    """Bilan de la semaine contenant d, comparé aux 4 semaines précédentes."""
+    start, end = week_bounds(d)
+    week = _period_stats(store, start, end)
+    base = _period_stats(store, start - timedelta(days=28), start - timedelta(days=1))
+    flags: list[dict[str, str]] = []
+    if week["asleep_avg_min"] is not None and week["asleep_avg_min"] < WEEK_SHORT_SLEEP_MIN:
+        flags.append({"level": "attention", "text": f"Sommeil moyen court : {queries.hm_text(week['asleep_avg_min'])} par nuit"})
+    if week["wake_sd_min"] is not None and week["wake_sd_min"] > WAKE_IRREGULAR_MIN:
+        flags.append({"level": "info", "text": f"Heures de réveil irrégulières (écart type {week['wake_sd_min']} min)"})
+    if week["resting_hr_avg"] is not None and base["resting_hr_avg"] is not None \
+            and week["resting_hr_avg"] - base["resting_hr_avg"] >= RHR_WEEK_DELTA:
+        flags.append({"level": "attention", "text": f"FC au repos en hausse : {week['resting_hr_avg']} bpm "
+                                                     f"(4 semaines précédentes : {base['resting_hr_avg']})"})
+    if week["steps_avg"] is not None and base["steps_avg"] and week["steps_avg"] < STEPS_WEEK_RATIO * base["steps_avg"]:
+        flags.append({"level": "info", "text": f"Semaine moins active : {week['steps_avg']} pas/jour (habituellement {base['steps_avg']})"})
+    if week["workouts"] == 0:
+        flags.append({"level": "info", "text": "Aucune séance cette semaine"})
+    tags: dict[str, int] = {}
+    for e in queries.journal(store, start, end)["events"]:
+        for t in e["tags"]:
+            tags[t] = tags.get(t, 0) + 1
+    return {"week": week_key(d), "start": start.isoformat(), "end": end.isoformat(), "this_week": week,
+            "previous_4_weeks": base, "journal_tags": tags, "flags": flags}
+
+
+def weekly_fallback(f: dict[str, Any]) -> str:
+    w = f["this_week"]
+    lines = [f"Semaine du {f['start']} au {f['end']} : {w['nights']} nuits"
+             + (f", {queries.hm_text(w['asleep_avg_min'])} de sommeil en moyenne" if w["asleep_avg_min"] else "") + "."]
+    if w["steps_avg"]:
+        lines.append(f"Pas : {w['steps_avg']} par jour ; séances : {w['workouts']} ({w['workout_min']} min).")
+    lines.append("À noter : " + " ; ".join(x["text"] for x in f["flags"]) + "." if f["flags"] else "Rien d'inhabituel.")
+    return "\n".join(lines)

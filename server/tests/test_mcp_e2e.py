@@ -14,7 +14,7 @@ from conftest import AUTH, full_login, sample_records
 
 EXPECTED_TOOLS = {
     "get_daily_steps", "get_sleep", "get_heart_rate", "get_hrv", "get_body_measurements",
-    "get_spo2", "get_workouts", "get_sync_status", "get_recovery", "get_stress", "get_training_load", "get_trends", "get_daily_report", "get_journal",
+    "get_spo2", "get_workouts", "get_sync_status", "get_recovery", "get_stress", "get_training_load", "get_trends", "get_daily_report", "get_journal", "get_weekly_report",
 }
 
 

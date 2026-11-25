@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
 import json
 import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -146,6 +147,14 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
             raise ToolError(str(exc)) from exc
 
     @mcp.tool(annotations=READ_ONLY)
+    def get_weekly_report(day: DateArg = None) -> dict[str, Any]:
+        """Bilan de la semaine (lundi → dimanche) contenant ce jour, comparé aux 4 semaines précédentes :
+        sommeil, régularité du réveil, FC au repos, pas, séances, stress, journal ; texte du dimanche soir."""
+        d = date.fromisoformat(day) if day else datetime.now(settings.tz).date()
+        f = report.weekly_facts(store, d)
+        return {"facts": f, **(reports.get(f["week"]) or {})}
+
+    @mcp.tool(annotations=READ_ONLY)
     def get_journal(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
         """Journal d'événements noté par l'utilisateur dans Parro Health (alcool, café tardif, malade, voyage,
         séance intense, stress, repas tardif, écrans tard, médicament, autre + note). Utile pour chercher ce
@@ -257,6 +266,16 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
                 f = await run_in_threadpool(report.facts, store, d)
                 data = {"facts": f, **(reports.get(d.isoformat()) or {})}
+            elif name == "weekly":
+                d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
+                f = await run_in_threadpool(report.weekly_facts, store, d)
+                saved = reports.get(f["week"])
+                if not saved:  # en semaine : le dernier rapport rédigé (semaine précédente)
+                    prev = d - timedelta(days=7)
+                    pf = await run_in_threadpool(report.weekly_facts, store, prev)
+                    if reports.get(pf["week"]):
+                        f, saved = pf, reports.get(pf["week"])
+                data = {"facts": f, **(saved or {})}
             elif name == "status":
                 data = {"timezone": str(settings.tz), **await run_in_threadpool(store.status)}
             elif name == "trends":
@@ -303,10 +322,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         require_report_token(request)
         body = await request.json()
         d, text, model = str(body.get("date", "")), str(body.get("narrative", "")).strip(), str(body.get("model", ""))[:80]
-        try:
-            datetime.strptime(d, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=422, detail="date AAAA-MM-JJ attendue") from None
+        if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) or re.fullmatch(r"S\d{4}-W\d{2}", d)):
+            raise HTTPException(status_code=422, detail="date AAAA-MM-JJ ou semaine SAAAA-Wnn attendue")
         if not text or len(text) > 4000:
             raise HTTPException(status_code=422, detail="texte vide ou trop long (4000 car. max)")
         reports.save_narrative(d, text, model)
@@ -344,6 +361,19 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         require_report_token(request)
         watch.ack_reminder(syncwatch.now_utc())
         return JSONResponse({"ack": "export_reminder"})
+
+    @app.get("/api/v1/report-job/weekly/pending")
+    async def weekly_pending(request: Request) -> JSONResponse:
+        require_report_token(request)
+        now = datetime.now(settings.tz)
+        f = await run_in_threadpool(report.weekly_facts, store, now.date())
+        saved = reports.get(f["week"]) or {}
+        return JSONResponse({
+            "date": f["week"],  # clé de stockage du texte
+            "ready": now.weekday() == 6 and now.hour >= 18,  # dimanche à partir de 18 h
+            "has_narrative": bool(saved.get("narrative")), "notified": bool(saved.get("notified_at")),
+            "narrative": saved.get("narrative"), "fallback": report.weekly_fallback(f), "facts": f,
+        }, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/v1/report-job/notified")
     async def report_notified(request: Request) -> JSONResponse:

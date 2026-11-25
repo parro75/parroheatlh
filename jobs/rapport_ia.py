@@ -39,6 +39,17 @@ SYSTEM = (
 )
 
 
+SYSTEM_WEEK = (
+    "Tu rédiges le bilan santé de la semaine de Parro, en français, en le tutoyant. 5 à 7 phrases, ton factuel "
+    "et bienveillant, sans titre, sans liste à puces, sans emoji. Utilise UNIQUEMENT les faits JSON fournis "
+    "(« this_week » comparé à « previous_4_weeks ») : n'invente rien, ne calcule rien de nouveau, aucun "
+    "diagnostic ni conseil médical. Couvre le sommeil (durée moyenne, heure de réveil et sa régularité, score), "
+    "la FC au repos, l'activité (pas, séances). Reprends chaque élément de « flags » sans en changer le sens ; "
+    "s'il n'y en a aucun, dis que la semaine ne présente rien d'inhabituel. Si « journal_tags » n'est pas vide, "
+    "cite ce qui a été noté, sans en tirer de conclusion."
+)
+
+
 def load_env() -> dict[str, str]:
     env = {}
     with open(ENV_FILE) as f:
@@ -69,7 +80,7 @@ def compact_facts(f: dict) -> dict:
     return out
 
 
-def write_with_model(env: dict, facts: dict) -> str | None:
+def write_with_model(env: dict, facts: dict, system: str = SYSTEM, compact: bool = True) -> str | None:
     body = {
         "model": env.get("MODEL", "mistral-nemo:12b"),
         "stream": False,
@@ -77,8 +88,8 @@ def write_with_model(env: dict, facts: dict) -> str | None:
         "keep_alive": "2m",  # libère vite la VRAM pour l'agent Assist de Home Assistant
         "options": {"temperature": 0.3, "num_ctx": 4096},
         "messages": [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": json.dumps(compact_facts(facts), ensure_ascii=False)},
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(compact_facts(facts) if compact else facts, ensure_ascii=False)},
         ],
     }
     try:
@@ -94,6 +105,26 @@ def write_with_model(env: dict, facts: dict) -> str | None:
     return text
 
 
+def weekly(env: dict, base: str, auth: dict) -> None:
+    """Rapport de la semaine : dimanche à partir de 18 h (décidé par le serveur), une seule fois."""
+    p = http("GET", f"{base}/api/v1/report-job/weekly/pending", headers=auth)
+    if not p["ready"] or (p["has_narrative"] and p["notified"]):
+        return
+    key, text = p["date"], p.get("narrative")
+    if not p["has_narrative"]:
+        text = write_with_model(env, p["facts"], SYSTEM_WEEK, compact=False)
+        model = env.get("MODEL", "mistral-nemo:12b")
+        if text is None:
+            text, model = p["fallback"], "secours (sans IA)"
+        http("POST", f"{base}/api/v1/report-job/narrative", {"date": key, "narrative": text, "model": model}, auth)
+    if not p["notified"]:
+        flags = p["facts"].get("flags", [])
+        title = "Rapport de la semaine" + (" — à noter" if any(x["level"] == "attention" for x in flags) else "")
+        http("POST", env["HA_WEBHOOK_URL"], {"title": title, "message": text})
+        http("POST", f"{base}/api/v1/report-job/notified", {"date": key}, auth)
+    print(f"{key} : rapport de la semaine traité ({len(text)} car.)")
+
+
 def watch(env: dict) -> int:
     """--surveillance : relaie l'alerte « plus de synchro » (seuils décidés par le serveur)."""
     base = env["SANTE_URL"].rstrip("/")
@@ -106,6 +137,7 @@ def watch(env: dict) -> int:
         http("POST", f"{base}/api/v1/report-job/sync-status/ack",
              {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
         print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
+    weekly(env, base, auth)
     r = http("GET", f"{base}/api/v1/report-job/export-reminder", headers=auth)
     if r["action"] == "export_reminder":
         http("POST", env["HA_WEBHOOK_URL"], {"title": r["title"], "message": r["message"]})
@@ -118,6 +150,11 @@ def main() -> int:
     env = load_env()
     if "--surveillance" in sys.argv:
         return watch(env)
+    if "--apercu-semaine" in sys.argv:
+        base = env["SANTE_URL"].rstrip("/")
+        p = http("GET", f"{base}/api/v1/report-job/weekly/pending", headers={"Authorization": f"Bearer {env['REPORT_TOKEN']}"})
+        print(write_with_model(env, p["facts"], SYSTEM_WEEK, compact=False) or "(rejeté → secours)\n" + p["fallback"])
+        return 0
     if "--apercu" in sys.argv:
         # Rédige le texte du jour SANS l'enregistrer ni notifier (choix du modèle, réglage du prompt).
         if len(sys.argv) > 2:
