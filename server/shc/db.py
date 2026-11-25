@@ -22,6 +22,7 @@ RECORD_TYPES = frozenset(
         "body_fat",
         "oxygen_saturation",
         "exercise_session",
+        "journal",  # événement noté dans l'app (étiquettes + note) ; data.deleted = suppression
     }
 )
 

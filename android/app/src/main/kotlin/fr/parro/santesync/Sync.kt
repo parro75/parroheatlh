@@ -82,14 +82,17 @@ object Sync {
         val from = if (backfill) now.minus(first) else prefs.lastSync?.minus(OVERLAP) ?: now.minus(first)
 
         val records = HealthReader(client).read(from, now, granted)
+        val (journal, journalIds) = Journal.pending(context)
+        for (k in 0 until journal.length()) records.put(journal.get(k))
         var sent = 0
         var i = 0
         while (i < records.length()) {
             val chunk = JSONArray()
             for (j in i until minOf(i + CHUNK, records.length())) chunk.put(records.get(j))
-            sent += post(prefs, chunk, trigger)
+            sent += postRecords(prefs, chunk, trigger)
             i += CHUNK
         }
+        if (journalIds.isNotEmpty()) Journal.markSent(context, journalIds)
         prefs.lastSync = now
         if (backfill) prefs.calcVersion = CALC_VERSION
         val missing = HealthReader.READ_PERMISSIONS.count { it !in granted }
@@ -97,7 +100,7 @@ object Sync {
         return SyncResult.Ok("$sent enregistrements envoyés depuis le ${from.atZone(ZoneId.systemDefault()).toLocalDate()}$note")
     }
 
-    private suspend fun post(prefs: Prefs, records: JSONArray, trigger: Trigger): Int = withContext(Dispatchers.IO) {
+    suspend fun postRecords(prefs: Prefs, records: JSONArray, trigger: Trigger): Int = withContext(Dispatchers.IO) {
         val body = JSONObject().put("records", records).toString().toByteArray(Charsets.UTF_8)
         val conn = URL("${prefs.serverUrl}/ingest").openConnection() as HttpURLConnection
         try {

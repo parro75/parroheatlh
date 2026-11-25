@@ -146,6 +146,13 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
             raise ToolError(str(exc)) from exc
 
     @mcp.tool(annotations=READ_ONLY)
+    def get_journal(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
+        """Journal d'événements noté par l'utilisateur dans Parro Health (alcool, café tardif, malade, voyage,
+        séance intense, stress, repas tardif, écrans tard, médicament, autre + note). Utile pour chercher ce
+        qui précède une mauvaise nuit ou une FC au repos élevée."""
+        return run(queries.journal, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
     def get_daily_report(day: DateArg = None) -> dict[str, Any]:
         """Bilan du jour (nuit, FC au repos, HRV, activité d'hier, SpO2) comparé aux moyennes personnelles,
         avec les signaux calculés par règles et le texte rédigé chaque matin par l'IA locale."""
@@ -235,7 +242,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         "steps": queries.daily_steps, "sleep": queries.sleep, "heart_rate": queries.heart_rate,
         "hrv": queries.hrv, "recovery": queries.recovery, "stress": queries.stress,
         "training_load": queries.training_load, "workouts": queries.workouts, "body": queries.body,
-        "spo2": queries.spo2,
+        "spo2": queries.spo2, "journal": queries.journal,
     }
 
     @app.get("/api/v1/{name}")

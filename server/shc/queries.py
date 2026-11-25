@@ -382,6 +382,27 @@ def trend_range(start: str | None, end: str | None, today: date) -> tuple[date, 
     return d_start, d_end
 
 
+# ---- journal d'événements (noté dans l'app) ---------------------------------------------------------
+
+JOURNAL_TAGS = {
+    "alcool": "alcool", "cafe_tardif": "café tardif", "malade": "malade", "voyage": "voyage",
+    "seance_intense": "séance intense", "stress": "stress", "repas_tardif": "repas tardif",
+    "ecrans_tard": "écrans tard", "medicament": "médicament", "autre": "autre",
+}
+
+
+def journal(store: Store, start: date, end: date) -> dict[str, Any]:
+    events = []
+    for r in store.fetch("journal", start, end):
+        if r.data.get("deleted"):
+            continue
+        events.append({"date": r.local_date, "time": _hhmm(r.start),
+                       "tags": [JOURNAL_TAGS.get(t, t) for t in r.data.get("tags", [])],
+                       **({"note": r.data["note"]} if r.data.get("note") else {})})
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "note": "événements notés par l'utilisateur dans Parro Health (heure locale)", "events": events}
+
+
 # ---- résumé pour l'écran d'accueil de l'app --------------------------------------------------
 
 

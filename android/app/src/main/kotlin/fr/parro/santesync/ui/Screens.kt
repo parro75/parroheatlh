@@ -156,6 +156,7 @@ fun HomeScreen(refresh: Int, onLogin: () -> Unit) {
             Api.get(ctx, "report"))
     }
     Screen {
+        JournalCard() // local : utilisable hors ligne et sans connexion au serveur
         Loaded(state, onLogin) { d ->
             val t = d.today
             ReportCard(d.report)

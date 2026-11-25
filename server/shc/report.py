@@ -146,6 +146,14 @@ def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
         k = max(w)
         out["weight"] = {"kg": round(w[k], 1), "date": k}
 
+    # ---- journal : ce qui a été noté depuis hier midi (rappelé tel quel, jamais interprété) ----------------
+    ev = [e for e in queries.journal(store, yesterday, d)["events"]
+          if (e["date"] == yesterday.isoformat() and (e["time"] or "00:00") >= "12:00")
+          or (e["date"] == d.isoformat() and (e["time"] or "00:00") < "12:00")]
+    if ev:
+        out["journal"] = [{"time": f"{'hier' if e['date'] == yesterday.isoformat() else 'ce matin'} {e['time']}",
+                           "tags": e["tags"], **({"note": e["note"]} if e.get("note") else {})} for e in ev]
+
     out["flags"] = flags
     out["ready"] = night is not None
     out["last_phone_sync"] = store.last_ingest_from("ParroHealth") or store.last_ingest_from("SanteSync")
@@ -166,6 +174,8 @@ def fallback_text(f: dict[str, Any]) -> str:
         lines.append(f"FC au repos : {r['bpm']} bpm" + (f" (moyenne 28 j : {r['avg28']})" if r.get("avg28") else "") + ".")
     if (s := f.get("steps_yesterday")):
         lines.append(f"Hier : {s['count']} pas" + (f" (moyenne {s['avg28']})" if s.get("avg28") else "") + ".")
+    if f.get("journal"):
+        lines.append("Noté dans le journal : " + " ; ".join(", ".join(e["tags"]) + f" ({e['time']})" for e in f["journal"]) + ".")
     if f.get("flags"):
         lines.append("À noter : " + " ; ".join(x["text"] for x in f["flags"]) + ".")
     else:

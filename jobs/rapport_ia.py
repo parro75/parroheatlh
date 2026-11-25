@@ -34,7 +34,8 @@ SYSTEM = (
     "cardiaque au repos comparée à sa moyenne, puis l'activité d'hier (pas et, s'il y en a, les séances). "
     "Reprends chaque élément de la liste « flags » sans en changer le sens ; s'il n'y en a aucun, dis que "
     "rien d'inhabituel n'apparaît. Si « ready » est faux, dis que la nuit n'a pas encore été reçue. "
-    "Si la HRV n'est pas « fresh », ne la commente pas."
+    "Si la HRV n'est pas « fresh », ne la commente pas. "
+    "S'il y a un « journal », rappelle brièvement ce qui a été noté, sans en tirer de lien ni de conclusion."
 )
 
 
@@ -61,7 +62,7 @@ def http(method: str, url: str, body: dict | None = None, headers: dict | None =
 def compact_facts(f: dict) -> dict:
     """Ce que le modèle a besoin de lire (petit contexte : modèle 12B sur 11 Go de VRAM)."""
     keep = ("date", "ready", "night", "resting_hr", "hrv", "steps_yesterday", "workouts_yesterday", "spo2_night",
-            "weight", "flags")
+            "weight", "journal", "flags")
     out = {k: f[k] for k in keep if k in f}
     for w in out.get("workouts_yesterday", []):
         w.pop("source", None)
