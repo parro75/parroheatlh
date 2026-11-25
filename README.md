@@ -80,8 +80,9 @@ install -d -o 10001 -g 10001 -m 700 /var/lib/sante
 docker compose up -d
 ```
 
-Puis le bloc `deploy/Caddyfile.sante` dans le reverse proxy, et autoriser le trafic de l'hôte vers le
-pont `br-sante` si la chaîne `OUTPUT` est en `DROP`. ⚠️ `OWNER_PASSWORD_HASH` doit rester **entre apostrophes** dans `.env` : sans elles,
+Le conteneur n'a **aucun réseau** (`network_mode: none`) : il écoute sur un socket Unix dans
+`/var/lib/sante-run` (`install -d -o 10001 -m 750`). Monter ce dossier sur `/run/sante` dans le conteneur
+du reverse proxy, puis ajouter le bloc `deploy/Caddyfile.sante`. Aucune règle de pare-feu nécessaire. ⚠️ `OWNER_PASSWORD_HASH` doit rester **entre apostrophes** dans `.env` : sans elles,
 `docker compose` interprète les `$` du hachage scrypt et le tronque en silence. L'URI TOTP à enregistrer dans l'appli
 d'authentification : `docker compose run --rm shc python -m shc.admin totp-uri`.
 
