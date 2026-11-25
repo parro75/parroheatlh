@@ -36,7 +36,8 @@ def main(argv: list[str]) -> None:
     if cmd == "init":
         totp = new_totp_secret()
         print(f"INGEST_TOKEN={secrets.token_urlsafe(32)}")
-        print(f"OWNER_PASSWORD_HASH={hash_password(_ask_password())}")
+        # Apostrophes : sinon docker compose interprète les « $ » du hachage scrypt et le tronque.
+        print(f"OWNER_PASSWORD_HASH='{hash_password(_ask_password())}'")
         print(f"TOTP_SECRET={totp}")
     elif cmd == "hash-password":
         print(hash_password(_ask_password()))
