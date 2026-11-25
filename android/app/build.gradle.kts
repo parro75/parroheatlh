@@ -20,8 +20,8 @@ android {
         applicationId = "fr.parro.santesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0"
+        versionCode = 9
+        versionName = "0.9.0"
     }
 
     signingConfigs {
@@ -37,7 +37,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 : APK ~3× plus léger. Health Connect, Glance, WorkManager fournissent leurs propres règles ;
+            // proguard-rules.pro garde en plus tout le code de l'appli (petit) par prudence.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (signingStore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
