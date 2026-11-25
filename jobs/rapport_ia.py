@@ -31,7 +31,7 @@ SYSTEM = (
     "Utilise UNIQUEMENT les faits fournis en JSON : n'invente rien, ne calcule rien de nouveau, "
     "ne pose aucun diagnostic et ne donne aucun conseil médical. "
     "Commence par la nuit (durée, heures de coucher et de lever, score s'il existe), puis la fréquence "
-    "cardiaque au repos comparée à sa moyenne, puis l'activité d'hier. "
+    "cardiaque au repos comparée à sa moyenne, puis l'activité d'hier (pas et, s'il y en a, les séances). "
     "Reprends chaque élément de la liste « flags » sans en changer le sens ; s'il n'y en a aucun, dis que "
     "rien d'inhabituel n'apparaît. Si « ready » est faux, dis que la nuit n'a pas encore été reçue. "
     "Si la HRV n'est pas « fresh », ne la commente pas."
@@ -95,6 +95,14 @@ def write_with_model(env: dict, facts: dict) -> str | None:
 
 def main() -> int:
     env = load_env()
+    if "--apercu" in sys.argv:
+        # Rédige le texte du jour SANS l'enregistrer ni notifier (choix du modèle, réglage du prompt).
+        if len(sys.argv) > 2:
+            env["MODEL"] = sys.argv[sys.argv.index("--apercu") + 1]
+        base = env["SANTE_URL"].rstrip("/")
+        p = http("GET", f"{base}/api/v1/report-job/pending", headers={"Authorization": f"Bearer {env['REPORT_TOKEN']}"})
+        print(write_with_model(env, p["facts"]) or "(rejeté → texte de secours)\n" + p["fallback"])
+        return 0
     base = env["SANTE_URL"].rstrip("/")
     auth = {"Authorization": f"Bearer {env['REPORT_TOKEN']}"}
     p = http("GET", f"{base}/api/v1/report-job/pending", headers=auth)

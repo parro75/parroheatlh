@@ -146,17 +146,19 @@ private val DAY_OPTIONS = listOf("14" to "14 jours", "30" to "30 jours", "90" to
 
 // ---- Accueil ---------------------------------------------------------------------------------------
 
-data class HomeData(val today: JSONObject, val steps: JSONObject, val sleep: JSONObject)
+data class HomeData(val today: JSONObject, val steps: JSONObject, val sleep: JSONObject, val report: JSONObject)
 
 @Composable
 fun HomeScreen(refresh: Int, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     val state by rememberLoad(refresh) {
-        HomeData(Api.get(ctx, "today"), Api.get(ctx, "steps", range(14)), Api.get(ctx, "sleep", range(14)))
+        HomeData(Api.get(ctx, "today"), Api.get(ctx, "steps", range(14)), Api.get(ctx, "sleep", range(14)),
+            Api.get(ctx, "report"))
     }
     Screen {
         Loaded(state, onLogin) { d ->
             val t = d.today
+            ReportCard(d.report)
             Section("Dernière nuit") {
                 val n = t.optJSONObject("last_night")
                 if (n == null) Text("Pas de nuit enregistrée hier soir.")
@@ -189,6 +191,37 @@ fun HomeScreen(refresh: Int, onLogin: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Rapport du jour : texte rédigé par l'IA locale (machine Ollama) et signaux calculés par règles sur le serveur. */
+@Composable
+fun ReportCard(report: JSONObject) {
+    val flags = report.optJSONObject("facts")?.optJSONArray("flags")?.objects().orEmpty()
+    Section("Rapport du jour") {
+        val text = report.str("narrative")
+        if (text == null) {
+            Text(if (report.optJSONObject("facts")?.optBoolean("ready") == true)
+                "Ta nuit est arrivée : le rapport est en cours de rédaction (quelques minutes)."
+            else "Le rapport sera rédigé dès que ta nuit aura été synchronisée.",
+                style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (flags.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            flags.forEach { f ->
+                val attention = f.optString("level") == "attention"
+                Text((if (attention) "⚠ " else "• ") + f.optString("text"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (attention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        report.str("model")?.let { m ->
+            Spacer(Modifier.height(6.dp))
+            Text("Rédigé par $m · signaux calculés par règles · ce n'est pas un avis médical",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
