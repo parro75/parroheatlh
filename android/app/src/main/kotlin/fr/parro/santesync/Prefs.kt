@@ -35,6 +35,24 @@ class Prefs(context: Context) {
         get() = sp.getString("changes_token", null)
         set(v) = sp.edit { if (v == null) remove("changes_token") else putString("changes_token", v) }
 
+    /** Objectifs personnels (envoyés au serveur : les règles du rapport s'en servent). */
+    var sleepGoalMin: Int
+        get() = sp.getInt("goal_sleep_min", 450)
+        set(v) = sp.edit { putInt("goal_sleep_min", v); putBoolean("goals_pending", true) }
+
+    var stepsGoal: Int
+        get() = sp.getInt("goal_steps", 8000)
+        set(v) = sp.edit { putInt("goal_steps", v); putBoolean("goals_pending", true) }
+
+    var goalsPending: Boolean
+        get() = sp.getBoolean("goals_pending", false)
+        set(v) = sp.edit { putBoolean("goals_pending", v) }
+
+    /** Dernier résumé « today » du serveur, pour le widget (rien d'affiché si l'app est verrouillée). */
+    var widgetSummary: String
+        get() = sp.getString("widget_summary", "") ?: ""
+        set(v) = sp.edit { putString("widget_summary", v) }
+
     /** Verrouillage biométrique à l'ouverture (option des Réglages). */
     var lockEnabled: Boolean
         get() = sp.getBoolean("lock_enabled", false)

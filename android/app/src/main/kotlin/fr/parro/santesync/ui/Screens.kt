@@ -146,20 +146,22 @@ private val DAY_OPTIONS = listOf("14" to "14 jours", "30" to "30 jours", "90" to
 
 // ---- Accueil ---------------------------------------------------------------------------------------
 
-data class HomeData(val today: JSONObject, val steps: JSONObject, val sleep: JSONObject, val report: JSONObject)
+data class HomeData(val today: JSONObject, val steps: JSONObject, val sleep: JSONObject, val report: JSONObject,
+                    val weekly: JSONObject)
 
 @Composable
 fun HomeScreen(refresh: Int, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     val state by rememberLoad(refresh) {
         HomeData(Api.get(ctx, "today"), Api.get(ctx, "steps", range(14)), Api.get(ctx, "sleep", range(14)),
-            Api.get(ctx, "report"))
+            Api.get(ctx, "report"), Api.get(ctx, "weekly"))
     }
     Screen {
         JournalCard() // local : utilisable hors ligne et sans connexion au serveur
         Loaded(state, onLogin) { d ->
             val t = d.today
             ReportCard(d.report)
+            if (d.weekly.str("narrative") != null) WeeklyCard(d.weekly)
             Section("Dernière nuit") {
                 val n = t.optJSONObject("last_night")
                 if (n == null) Text("Pas de nuit enregistrée hier soir.")
@@ -228,10 +230,24 @@ fun ReportCard(report: JSONObject) {
 }
 
 @Composable
+fun WeeklyCard(weekly: JSONObject) {
+    val f = weekly.optJSONObject("facts")
+    Section("Rapport de la semaine" + (f?.let { " (${shortDate(it.optString("start"))} – ${shortDate(it.optString("end"))})" } ?: "")) {
+        Text(weekly.optString("narrative"), style = MaterialTheme.typography.bodyMedium)
+        f?.optJSONArray("flags")?.objects()?.forEach { x ->
+            val attention = x.optString("level") == "attention"
+            Text((if (attention) "⚠ " else "• ") + x.optString("text"), style = MaterialTheme.typography.bodySmall,
+                color = if (attention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 fun StepsBars(steps: JSONObject, days: Int) {
     val byDay = steps.getJSONArray("days").objects().associate { it.optString("date") to it.dbl("steps") }
     val dates = allDays(days)
-    BarChart(dates.map(::shortDate), dates.map { byDay[it] }, SeriesColors.steps, ::int, reference = 10000.0)
+    val goal = fr.parro.santesync.Prefs(LocalContext.current).stepsGoal.toDouble()
+    BarChart(dates.map(::shortDate), dates.map { byDay[it] }, SeriesColors.steps, ::int, reference = goal)
 }
 
 /** Une barre empilée par nuit (profond, paradoxal, léger, éveillé ; « non détaillé » si pas de phases). */
@@ -255,6 +271,7 @@ fun SleepBars(sleep: JSONObject, days: Int) {
             MaterialTheme.colorScheme.outline),
         names = listOf("profond", "paradoxal", "léger", "éveil", "non détaillé"),
         format = ::hm,
+        reference = fr.parro.santesync.Prefs(LocalContext.current).sleepGoalMin.toDouble(), // objectif de sommeil
     )
 }
 

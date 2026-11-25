@@ -403,6 +403,18 @@ def journal(store: Store, start: date, end: date) -> dict[str, Any]:
             "note": "événements notés par l'utilisateur dans Parro Health (heure locale)", "events": events}
 
 
+DEFAULT_GOALS = {"sleep_min": 450, "steps": 8000}
+
+
+def goals(store: Store) -> dict[str, Any]:
+    """Objectifs réglés dans l'app (dernier enregistrement « goals »), sinon les valeurs par défaut."""
+    rows = store.fetch("goals", date(2000, 1, 1), date(2100, 1, 1))
+    g = dict(DEFAULT_GOALS)
+    if rows:
+        g.update({k: v for k, v in rows[-1].data.items() if k in DEFAULT_GOALS and isinstance(v, (int, float)) and v > 0})
+    return g
+
+
 # ---- résumé pour l'écran d'accueil de l'app --------------------------------------------------
 
 
@@ -429,6 +441,7 @@ def today(store: Store, day: date) -> dict[str, Any]:
             out[key] = {"date": r.local_date, "value": r.data[field]}
     if "hrv" not in out and (r := _latest(store, "energy_score", day, 60)) is not None and r.data.get("hrv_ms"):
         out["hrv"] = {"date": r.local_date, "value": r.data["hrv_ms"]}
+    out["goals"] = goals(store)
     status = store.status()
     phone = [t for t in (store.last_ingest_from("SanteSync"), store.last_ingest_from("ParroHealth")) if t]
     out["last_phone_sync"] = max(phone) if phone else None

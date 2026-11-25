@@ -61,12 +61,12 @@ def test_three_short_nights_and_quiet_day(client):
     seed(store, today_minutes=320, rhr_today=55, steps_yesterday=9000)
     store.upsert([night(D - timedelta(days=1), 330), night(D - timedelta(days=2), 340)], "test", allowed=ALL_TYPES)
     f = report.facts(store, D)
-    assert texts(f) == ["3e nuit courte d'affilée (5 h 20)"]
+    assert texts(f) == ["3e nuit courte d'affilée (5 h 20)", "Objectif de pas atteint hier : 9000 (objectif 8000)"]
 
 
 def test_no_flag_and_no_night(client):
     store = client.app.state.store
-    seed(store, today_minutes=460, rhr_today=55, steps_yesterday=9000)
+    seed(store, today_minutes=460, rhr_today=55, steps_yesterday=7000)   # sous l'objectif de pas, mais normal
     assert texts(report.facts(store, D)) == []
     assert "Rien d'inhabituel" in report.fallback_text(report.facts(store, D))
     empty = report.facts(store, D + timedelta(days=10))

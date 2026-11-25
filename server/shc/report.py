@@ -54,7 +54,8 @@ def _per_day(store: Store, rtype: str, field: str, start: date, end: date) -> di
 def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
     """Faits du bilan du jour d (jour du réveil) et signaux, comparés aux moyennes personnelles."""
     flags: list[dict[str, str]] = []
-    out: dict[str, Any] = {"date": d.isoformat()}
+    g = queries.goals(store)
+    out: dict[str, Any] = {"date": d.isoformat(), "goals": g}
     yesterday = d - timedelta(days=1)
     b28 = d - timedelta(days=28)
 
@@ -75,6 +76,9 @@ def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
             else:
                 flags.append({"level": "attention", "text": f"Nuit courte : {queries.hm_text(a)}"
                               + (f" (moyenne 28 j : {queries.hm_text(mean(hist))})" if hist else "")})
+        elif a is not None and a < g["sleep_min"]:
+            flags.append({"level": "info", "text": f"Sous ton objectif de sommeil : {queries.hm_text(a)} "
+                                                   f"(objectif {queries.hm_text(g['sleep_min'])})"})
         elif a is not None and len(hist) >= MIN_BASELINE and a >= mean(hist) + 60:
             flags.append({"level": "info", "text": f"Nuit plus longue que d'habitude : {queries.hm_text(a)}"})
         if night.get("score") is not None and night["score"] < 60:
@@ -128,6 +132,8 @@ def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
                 flags.append({"level": "info", "text": f"Journée peu active hier : {int(v)} pas (moyenne {_r(m)})"})
             elif v > 1.5 * m:
                 flags.append({"level": "info", "text": f"Journée très active hier : {int(v)} pas (moyenne {_r(m)})"})
+        if v >= g["steps"]:
+            flags.append({"level": "info", "text": f"Objectif de pas atteint hier : {int(v)} (objectif {int(g['steps'])})"})
         out["steps_yesterday"] = rec
     ws = queries.workouts(store, yesterday, yesterday)["workouts"]
     if ws:
@@ -241,7 +247,7 @@ def week_key(d: date) -> str:
     return f"S{iso.year}-W{iso.week:02d}"
 
 
-def _period_stats(store: Store, start: date, end: date) -> dict[str, Any]:
+def _period_stats(store: Store, start: date, end: date, g: dict[str, Any] | None = None) -> dict[str, Any]:
     nights = [n for n in queries.sleep(store, start, end)["sessions"] if (n.get("asleep_min") or n.get("in_bed_min") or 0) >= 180]
     asleep = [_asleep(n) for n in nights if _asleep(n)]
     wakes = []
@@ -266,13 +272,16 @@ def _period_stats(store: Store, start: date, end: date) -> dict[str, Any]:
         "workouts": len(ws),
         "workout_min": _r(sum(w.get("duration_min") or 0 for w in ws)),
         "stress_avg": _r(mean(stress)) if stress else None,
+        **({"nights_at_sleep_goal": sum(1 for a in asleep if a >= g["sleep_min"]),
+            "days_at_steps_goal": sum(1 for v in steps.values() if v >= g["steps"])} if g else {}),
     }
 
 
 def weekly_facts(store: Store, d: date) -> dict[str, Any]:
     """Bilan de la semaine contenant d, comparé aux 4 semaines précédentes."""
     start, end = week_bounds(d)
-    week = _period_stats(store, start, end)
+    g = queries.goals(store)
+    week = _period_stats(store, start, end, g)
     base = _period_stats(store, start - timedelta(days=28), start - timedelta(days=1))
     flags: list[dict[str, str]] = []
     if week["asleep_avg_min"] is not None and week["asleep_avg_min"] < WEEK_SHORT_SLEEP_MIN:
@@ -291,7 +300,7 @@ def weekly_facts(store: Store, d: date) -> dict[str, Any]:
     for e in queries.journal(store, start, end)["events"]:
         for t in e["tags"]:
             tags[t] = tags.get(t, 0) + 1
-    return {"week": week_key(d), "start": start.isoformat(), "end": end.isoformat(), "this_week": week,
+    return {"week": week_key(d), "start": start.isoformat(), "end": end.isoformat(), "goals": g, "this_week": week,
             "previous_4_weeks": base, "journal_tags": tags, "flags": flags}
 
 

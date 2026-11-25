@@ -96,6 +96,8 @@ object Sync {
 
         val records = reader.read(from, now, granted)
         changes?.takeIf { !it.expired }?.records?.let { for (k in 0 until it.length()) records.put(it.get(k)) }
+        val goalsSent = prefs.goalsPending
+        if (goalsSent) records.put(Goals.record(prefs))
         val (journal, journalIds) = Journal.pending(context)
         for (k in 0 until journal.length()) records.put(journal.get(k))
         var sent = 0
@@ -107,7 +109,9 @@ object Sync {
             i += CHUNK
         }
         if (journalIds.isNotEmpty()) Journal.markSent(context, journalIds)
+        if (goalsSent) prefs.goalsPending = false
         prefs.changesToken = nextToken // seulement après un envoi réussi
+        Widget.refresh(context) // résumé du serveur pour le widget (sans effet si non connecté)
         prefs.lastSync = now
         if (backfill) prefs.calcVersion = CALC_VERSION
         val missing = HealthReader.READ_PERMISSIONS.count { it !in granted }

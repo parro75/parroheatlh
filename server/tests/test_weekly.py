@@ -47,3 +47,21 @@ def test_weekly_job_route_and_key(client):
     assert client.get("/api/v1/report-job/weekly/pending", headers=JOB).json()["narrative"] == "Bonne semaine."
     bad = client.post("/api/v1/report-job/narrative", json={"date": "S26-W1", "narrative": "x"}, headers=JOB)
     assert bad.status_code == 422
+
+
+def test_goals_used_by_rules(client):
+    from conftest import AUTH
+    from test_report import D, seed as seed_day
+    store = client.app.state.store
+    seed_day(store, today_minutes=400, rhr_today=55, steps_yesterday=12000)   # 6 h 40 : pas « courte »
+    f = report.facts(store, D)
+    texts = [x["text"] for x in f["flags"]]
+    assert "Sous ton objectif de sommeil : 6 h 40 (objectif 7 h 30)" in texts
+    assert "Objectif de pas atteint hier : 12000 (objectif 8000)" in texts
+    goals = {"type": "goals", "id": "goals", "start": "2026-11-25T12:00:00-05:00", "zone_offset": "-05:00",
+             "data": {"sleep_min": 390, "steps": 15000}}
+    assert client.post("/ingest", json={"records": [goals]}, headers=AUTH).status_code == 200
+    texts = [x["text"] for x in report.facts(store, D)["flags"]]
+    assert not any("objectif" in t for t in texts)                              # 6 h 40 ≥ 6 h 30 ; 12000 < 15000
+    w = report.weekly_facts(store, D)
+    assert w["goals"] == {"sleep_min": 390, "steps": 15000} and "nights_at_sleep_goal" in w["this_week"]

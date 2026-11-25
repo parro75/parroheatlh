@@ -105,10 +105,11 @@ fun StackedBarChart(
     names: List<String>,
     format: (Double) -> String,
     modifier: Modifier = Modifier,
+    reference: Double? = null,
 ) {
     var selected by remember(labels) { mutableStateOf<Int?>(null) }
     val axis = MaterialTheme.colorScheme.outlineVariant
-    val max = stacks.maxOfOrNull { it.sum() }?.takeIf { it > 0 } ?: 1.0
+    val max = ((stacks.maxOfOrNull { it.sum() } ?: 0.0).coerceAtLeast(reference ?: 0.0)).takeIf { it > 0 } ?: 1.0
     Column(modifier) {
         Caption(selected?.let { i ->
             labels[i] + " : " + format(stacks[i].sum()) + " (" +
@@ -125,6 +126,10 @@ fun StackedBarChart(
             val slot = size.width / n
             val bottom = size.height - 4.dp.toPx()
             drawLine(axis, Offset(0f, bottom), Offset(size.width, bottom))
+            reference?.let {
+                val y = bottom - (it / max * (bottom - 4.dp.toPx())).toFloat()
+                drawLine(axis, Offset(0f, y), Offset(size.width, y), strokeWidth = 2f)
+            }
             stacks.forEachIndexed { i, parts ->
                 var y = bottom
                 val w = (slot * 0.7f).coerceAtLeast(2f)

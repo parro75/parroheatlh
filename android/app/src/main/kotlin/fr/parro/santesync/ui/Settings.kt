@@ -126,6 +126,23 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
                 OutlinedButton(onClick = actions.openDiagnostic) { Text("Diagnostic") }
             }
         }
+        Section("Objectifs") {
+            var sleepGoal by remember { mutableStateOf(prefs.sleepGoalMin) }
+            var stepsGoal by remember { mutableStateOf(prefs.stepsGoal) }
+            Text("Sommeil", style = MaterialTheme.typography.bodyMedium)
+            Choices(fr.parro.santesync.Goals.SLEEP_OPTIONS.map { it.toString() to hm(it.toDouble()) }, sleepGoal.toString()) {
+                sleepGoal = it.toInt(); prefs.sleepGoalMin = sleepGoal
+                scope.launch { fr.parro.santesync.Goals.flush(ctx); fr.parro.santesync.ParroWidget.updateAll(ctx) }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text("Pas par jour", style = MaterialTheme.typography.bodyMedium)
+            Choices(fr.parro.santesync.Goals.STEPS_OPTIONS.map { it.toString() to "%,d".format(it).replace(',', ' ') }, stepsGoal.toString()) {
+                stepsGoal = it.toInt(); prefs.stepsGoal = stepsGoal
+                scope.launch { fr.parro.santesync.Goals.flush(ctx); fr.parro.santesync.ParroWidget.updateAll(ctx) }
+            }
+            Text("Utilisés par les graphiques et par les règles du rapport du matin et de la semaine.",
+                style = MaterialTheme.typography.bodySmall)
+        }
         Section("Export Samsung Health (HRV, scores, historique)") {
             Text("Samsung Health → Réglages → Télécharger les données personnelles. Dans Mes fichiers, appui long " +
                 "sur le dossier → Compresser, puis « Partager » le zip vers Parro Health, ou choisis-le ici.",
@@ -145,8 +162,10 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
                         style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(checked = locked, onCheckedChange = { on ->
-                    if (!on) { prefs.lockEnabled = false; locked = false }
-                    else actions.confirmBiometric { ok -> if (ok) { prefs.lockEnabled = true; locked = true } }
+                    // Le widget masque ses données dès que le verrouillage est actif.
+                    val refreshWidget = { scope.launch { fr.parro.santesync.ParroWidget.updateAll(ctx) } }
+                    if (!on) { prefs.lockEnabled = false; locked = false; refreshWidget() }
+                    else actions.confirmBiometric { ok -> if (ok) { prefs.lockEnabled = true; locked = true; refreshWidget() } }
                 })
             }
         }

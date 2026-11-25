@@ -23,6 +23,7 @@ RECORD_TYPES = frozenset(
         "oxygen_saturation",
         "exercise_session",
         "journal",  # événement noté dans l'app (étiquettes + note) ; data.deleted = suppression
+        "goals",  # objectifs personnels réglés dans l'app (id fixe « goals ») : sleep_min, steps
     }
 )
 

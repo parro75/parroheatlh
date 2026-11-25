@@ -20,8 +20,8 @@ android {
         applicationId = "fr.parro.santesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
     }
 
     signingConfigs {
@@ -60,6 +60,7 @@ dependencies {
     implementation("androidx.browser:browser:1.10.0")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.fragment:fragment-ktx:1.9.1")
+    implementation("androidx.glance:glance-appwidget:1.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     implementation(platform("androidx.compose:compose-bom:2026.11.01"))
