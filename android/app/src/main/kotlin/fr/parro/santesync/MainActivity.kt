@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -66,6 +67,7 @@ private enum class Tab(val title: String, val icon: ImageVector) {
     SLEEP("Sommeil", Icons.Filled.Star),
     HEART("Cœur", Icons.Filled.Favorite),
     ACTIVITY("Activité", Icons.Filled.Place),
+    BODY("Corps", Icons.Filled.Person),
     TRENDS("Tendances", Icons.Filled.DateRange),
     SETTINGS("Réglages", Icons.Filled.Settings),
 }
@@ -115,6 +117,7 @@ class MainActivity : FragmentActivity() {
             resumeTick++
         }
         askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+        WeighReminder.schedule(this, WeighReminder.Policy.AT_START) // sans effet si le rappel est désactivé
         // Les rapports sont annoncés par l'appli elle-même : demander l'autorisation dès l'ouverture.
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -192,6 +195,7 @@ class MainActivity : FragmentActivity() {
                             Tab.SLEEP -> SleepScreen(key, toLogin)
                             Tab.HEART -> HeartScreen(key, toLogin)
                             Tab.ACTIVITY -> ActivityScreen(key, toLogin)
+                            Tab.BODY -> fr.parro.santesync.ui.BodyScreen(key, toLogin)
                             Tab.TRENDS -> TrendsScreen(key, toLogin)
                             Tab.SETTINGS -> if (showDiagnostic) DiagnosticScreen(resumeTick,
                                 onRequestExtra = { requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) },

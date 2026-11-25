@@ -77,3 +77,11 @@ def test_app_client_requires_pkce_verifier(client):
     bad = client.post("/token", data={"grant_type": "authorization_code", "code": code, "redirect_uri": APP_CB,
                                       "client_id": APP_ID, "code_verifier": "x" * 50})
     assert bad.status_code == 400
+
+
+def test_body_allows_full_history_but_others_stay_limited(client):
+    t = app_login(client)
+    h = {"Authorization": f"Bearer {t['access_token']}"}
+    long = {"start": "2015-01-01", "end": "2026-11-25"}
+    assert client.get("/api/v1/body", params=long, headers=h).status_code == 200
+    assert client.get("/api/v1/steps", params=long, headers=h).status_code == 422

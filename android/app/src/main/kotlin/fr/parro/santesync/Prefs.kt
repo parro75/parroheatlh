@@ -49,6 +49,19 @@ class Prefs(context: Context) {
         set(v) = sp.edit { putBoolean("goals_pending", v) }
 
     /** Dernier résumé « today » du serveur, pour le widget (rien d'affiché si l'app est verrouillée). */
+    /** Rappel de pesée : off / daily / weekly, jour (1 = lundi … 7 = dimanche), heure en minutes. */
+    var weighReminder: String
+        get() = sp.getString("weigh_reminder", WeighReminder.OFF) ?: WeighReminder.OFF
+        set(v) = sp.edit { putString("weigh_reminder", v) }
+
+    var weighDay: Int
+        get() = sp.getInt("weigh_day", 1)
+        set(v) = sp.edit { putInt("weigh_day", v) }
+
+    var weighMinutes: Int
+        get() = sp.getInt("weigh_minutes", 450)
+        set(v) = sp.edit { putInt("weigh_minutes", v) }
+
     /** Dernier rapport (jour « AAAA-MM-JJ », semaine « SAAAA-Wnn ») déjà annoncé par une notification. */
     var notifiedDay: String
         get() = sp.getString("notified_day", "") ?: ""

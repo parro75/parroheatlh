@@ -143,6 +143,25 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
             Text("Utilisés par les graphiques et par les règles du rapport du matin et de la semaine.",
                 style = MaterialTheme.typography.bodySmall)
         }
+        Section("Rappel de pesée") {
+            var mode by remember { mutableStateOf(prefs.weighReminder) }
+            var day by remember { mutableStateOf(prefs.weighDay) }
+            var minutes by remember { mutableStateOf(prefs.weighMinutes) }
+            val apply = { fr.parro.santesync.WeighReminder.schedule(ctx, fr.parro.santesync.WeighReminder.Policy.FROM_SETTINGS) }
+            Choices(listOf(fr.parro.santesync.WeighReminder.OFF to "Désactivé", fr.parro.santesync.WeighReminder.DAILY to "Chaque jour",
+                fr.parro.santesync.WeighReminder.WEEKLY to "Chaque semaine"), mode) { mode = it; prefs.weighReminder = it; apply() }
+            if (mode == fr.parro.santesync.WeighReminder.WEEKLY) {
+                Choices(fr.parro.santesync.WeighReminder.DAYS.map { it.first.toString() to it.second }, day.toString()) {
+                    day = it.toInt(); prefs.weighDay = day; apply()
+                }
+            }
+            if (mode != fr.parro.santesync.WeighReminder.OFF) {
+                Choices(fr.parro.santesync.WeighReminder.TIME_OPTIONS.map { it.toString() to "${it / 60} h ${"%02d".format(it % 60)}".replace(" h 00", " h") },
+                    minutes.toString()) { minutes = it.toInt(); prefs.weighMinutes = minutes; apply() }
+                Text("Pas de rappel si tu t'es déjà pesé ce jour-là (balance lue dans Health Connect).",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
         Section("Export Samsung Health (HRV, scores, historique)") {
             Text("Samsung Health → Réglages → Télécharger les données personnelles. Dans Mes fichiers, appui long " +
                 "sur le dossier → Compresser, puis « Partager » le zip vers Parro Health, ou choisis-le ici.",

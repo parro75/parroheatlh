@@ -283,7 +283,9 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 data = await run_in_threadpool(queries.trends, store, q.get("metric", "steps"),
                                                q.get("period", "month"), d0, d1)
             elif name in api_ranges:
-                d0, d1 = queries.date_range(q.get("start"), q.get("end"), today)
+                # poids et masse grasse : quelques mesures par mois → tout l'historique (20 ans) est permis
+                rng = queries.trend_range if name == "body" else queries.date_range
+                d0, d1 = rng(q.get("start"), q.get("end"), today)
                 data = await run_in_threadpool(api_ranges[name], store, d0, d1)
             else:
                 raise HTTPException(status_code=404, detail="not found")

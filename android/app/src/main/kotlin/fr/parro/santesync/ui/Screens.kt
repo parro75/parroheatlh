@@ -403,7 +403,7 @@ fun ActivityScreen(refresh: Int, onLogin: () -> Unit) {
 private val METRICS = listOf(
     "steps" to "Pas", "sleep_minutes" to "Sommeil", "sleep_score" to "Score sommeil", "hrv_nightly" to "HRV nocturne",
     "sleeping_hr" to "FC sommeil", "heart_rate_avg" to "FC moyenne", "stress" to "Stress", "energy" to "Énergie",
-    "weight" to "Poids", "workout_minutes" to "Minutes de sport",
+    "weight" to "Poids", "body_fat" to "Masse grasse", "workout_minutes" to "Minutes de sport",
 )
 private val PERIODS = listOf("year" to "Par année", "month" to "Par mois", "week" to "Par semaine")
 
@@ -430,6 +430,7 @@ fun TrendsScreen(refresh: Int, onLogin: () -> Unit) {
             val fmt: (Double) -> String = when (metric) {
                 "sleep_minutes" -> ::hm
                 "weight" -> { v -> "%.1f kg".format(v) }
+                "body_fat" -> { v -> "%.1f %%".format(v) }
                 "workout_minutes" -> { v -> "${int(v)} min" }
                 else -> ::int
             }
