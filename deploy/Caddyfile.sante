@@ -1,4 +1,5 @@
-# Bloc à insérer dans le Caddyfile de l'hôte (Caddy en réseau hôte).
+# Bloc à insérer dans le Caddyfile de l'hôte. Le service écoute sur un socket Unix (conteneur sans réseau) :
+# monter /var/lib/sante-run sur /run/sante dans le conteneur Caddy.
 # Données de santé RÉELLES : chaque route est ouverte explicitement, tout le reste répond 404.
 sante.example.org {
 	import accesslog   # plus aucun secret dans les chemins depuis OAuth ; Caddy masque l'en-tête Authorization
@@ -23,20 +24,20 @@ sante.example.org {
 		remote_ip 160.79.104.0/21 153.61.208.0/20
 	}
 	handle @claude {
-		reverse_proxy 172.26.0.2:8080
+		reverse_proxy unix//run/sante/shc.sock
 	}
 
 	# App Android Parro Health, de n'importe où (5G comprise) : échange et révocation de jetons OAuth
 	# (PKCE, codes à usage unique) et API de lecture (jeton OAuth exigé). Les /token de Claude passent ici.
 	@app path /token /revoke /api/v1/*
 	handle @app {
-		reverse_proxy 172.26.0.2:8080
+		reverse_proxy unix//run/sante/shc.sock
 	}
 
 	# Navigateur du propriétaire, de n'importe où : protégé par mot de passe + TOTP.
 	@navigateur path /authorize /login
 	handle @navigateur {
-		reverse_proxy 172.26.0.2:8080
+		reverse_proxy unix//run/sante/shc.sock
 	}
 
 	# Téléphone (5G comprise) : jeton d'ingestion distinct, POST seulement.
@@ -50,10 +51,10 @@ sante.example.org {
 		path /ingest-export/*
 	}
 	handle @ingest_export {
-		reverse_proxy 172.26.0.2:8080
+		reverse_proxy unix//run/sante/shc.sock
 	}
 	handle @ingest {
-		reverse_proxy 172.26.0.2:8080
+		reverse_proxy unix//run/sante/shc.sock
 	}
 
 	handle {

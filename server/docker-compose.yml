@@ -3,23 +3,24 @@
 services:
   shc:
     build: .
-    image: shc:0.9.0
+    image: shc:0.9.1
     container_name: shc
     restart: unless-stopped
     user: "10001:10001"
     env_file: .env          # mode 600 : INGEST_TOKEN, OWNER_PASSWORD_HASH, TOTP_SECRET, PUBLIC_URL
 
-    # Réseau INTERNE dédié (comme cookcli) : ni route par défaut ni masquerade.
-    # Le conteneur ne peut joindre ni Internet, ni l'hôte, ni les autres réseaux Docker.
-    # Aucun port publié : Caddy (réseau hôte) vise directement l'IP fixe ci-dessous.
-    networks:
-      sante:
-        ipv4_address: 172.26.0.2
+    # AUCUN réseau (25/11/2026) : ni Internet, ni l'hôte, ni pont Docker. Caddy parle au service par un
+    # socket Unix dans /var/lib/sante-run (750, propriétaire 10001), monté aussi dans le conteneur Caddy.
+    # Plus de trafic en clair sur un pont, plus de règle de pare-feu à maintenir.
+    network_mode: none
+    environment:
+      UNIX_SOCKET: /run/shc/shc.sock
 
     # Base SQLite HORS de /opt : elle n'entre pas dans la sauvegarde nocturne en clair
     # (décision du 25/11/2026 — en cas de perte, réimport depuis le téléphone).
     volumes:
       - /var/lib/sante:/data
+      - /var/lib/sante-run:/run/shc
 
     read_only: true
     cap_drop: [ALL]
@@ -29,15 +30,3 @@ services:
     mem_limit: 512m   # l'import d'un export envoyé par le téléphone tourne dans le service (~125 Mo)
     cpus: 0.5
     pids_limit: 64
-
-networks:
-  sante:
-    driver: bridge
-    internal: true
-    driver_opts:
-      # Nom fixe : /etc/init.d/firewall autorise OUTPUT -o br-sante (Caddy -> conteneur).
-      com.docker.network.bridge.name: br-sante
-    ipam:
-      config:
-        - subnet: 172.26.0.0/24
-          gateway: 172.26.0.1
