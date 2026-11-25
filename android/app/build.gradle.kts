@@ -20,8 +20,8 @@ android {
         applicationId = "fr.parro.santesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     signingConfigs {
@@ -58,6 +58,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.browser:browser:1.10.0")
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment-ktx:1.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     implementation(platform("androidx.compose:compose-bom:2026.11.01"))
@@ -67,4 +69,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,6 +50,9 @@ class SettingsActions(
     val requestBatteryExemption: () -> Unit,
     val openHealthConnectInstall: () -> Unit,
     val toast: (String) -> Unit,
+    val openDiagnostic: () -> Unit,
+    /** Vérifie la biométrie avant d'activer le verrouillage ; appelle onResult(true) si réussi. */
+    val confirmBiometric: (onResult: (Boolean) -> Unit) -> Unit,
 )
 
 private fun fmt(ms: Long): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -118,6 +122,21 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
                     if (HealthConnectClient.getSdkStatus(ctx) == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED)
                         actions.openHealthConnectInstall() else actions.requestHealthPermissions()
                 }) { Text("Autoriser") }
+                OutlinedButton(onClick = actions.openDiagnostic) { Text("Diagnostic") }
+            }
+        }
+        Section("Confidentialité") {
+            var locked by remember { mutableStateOf(prefs.lockEnabled) }
+            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text("Verrouiller l'app", style = MaterialTheme.typography.bodyLarge)
+                    Text("Empreinte, visage ou code du téléphone à l'ouverture (après 1 min en arrière-plan).",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = locked, onCheckedChange = { on ->
+                    if (!on) { prefs.lockEnabled = false; locked = false }
+                    else actions.confirmBiometric { ok -> if (ok) { prefs.lockEnabled = true; locked = true } }
+                })
             }
         }
         Section("Synchronisation") {

@@ -28,6 +28,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 .build()
             WorkManager.getInstance(context)
                 .enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
+            MorningWorker.schedule(context) // synchro rapide 5 h-11 h (garde la planification existante)
         }
 
         /** Prochaine exécution prévue par Android (epoch ms), ou null si rien n'est planifié. */

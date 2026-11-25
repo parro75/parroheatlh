@@ -30,6 +30,11 @@ class Prefs(context: Context) {
         get() = sp.getInt("calc_version", 0)
         set(v) = sp.edit { putInt("calc_version", v) }
 
+    /** Verrouillage biométrique à l'ouverture (option des Réglages). */
+    var lockEnabled: Boolean
+        get() = sp.getBoolean("lock_enabled", false)
+        set(v) = sp.edit { putBoolean("lock_enabled", v) }
+
     val isConfigured: Boolean
         get() = serverUrl.startsWith("https://") && token.length >= 32
 }

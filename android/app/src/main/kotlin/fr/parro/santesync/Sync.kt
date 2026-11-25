@@ -29,7 +29,7 @@ sealed class SyncResult(val message: String) {
 class HttpStatusException(val code: Int, body: String) : IOException("HTTP $code : ${body.take(200)}")
 
 /** Origine d'une synchro : affichée dans l'app ET envoyée au serveur (en-tête User-Agent). */
-enum class Trigger(val label: String) { AUTO("auto"), MANUAL("manuel") }
+enum class Trigger(val label: String) { AUTO("auto"), MORNING("auto-matin"), MANUAL("manuel") }
 
 object Sync {
     private val OVERLAP: Duration = Duration.ofDays(2)
