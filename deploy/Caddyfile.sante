@@ -19,10 +19,17 @@ sante.example.org {
 	# uniquement depuis les IP SORTANTES publiées par Anthropic
 	# (https://platform.claude.com/docs/en/api/ip-addresses, relevé du 25/11/2026).
 	@claude {
-		path /mcp /token /register /revoke /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+		path /mcp /register /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
 		remote_ip 160.79.104.0/21 153.61.208.0/20
 	}
 	handle @claude {
+		reverse_proxy 172.26.0.2:8080
+	}
+
+	# App Android Parro Health, de n'importe où (5G comprise) : échange et révocation de jetons OAuth
+	# (PKCE, codes à usage unique) et API de lecture (jeton OAuth exigé). Les /token de Claude passent ici.
+	@app path /token /revoke /api/v1/*
+	handle @app {
 		reverse_proxy 172.26.0.2:8080
 	}
 
