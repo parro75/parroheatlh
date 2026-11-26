@@ -134,6 +134,33 @@ def sleep(store: Store, start: date, end: date) -> dict[str, Any]:
     }
 
 
+def night(store: Store, d: date) -> dict[str, Any]:
+    """Nuit principale du jour de réveil d, avec la frise des phases (hypnogramme de l'app).
+
+    segments : [{stage, start_min, dur_min}], minutes depuis le coucher ; les phases sont rangées par heure.
+    """
+    rows = store.fetch("sleep_session", d, d)
+    if not rows:
+        return {"date": d.isoformat(), "night": None}
+    nights = [summarise_sleep(r) for r in rows]
+    _attach_scores(rows, nights, store.fetch("sleep_score", d, d))
+    i = max(range(len(nights)), key=lambda k: nights[k].get("asleep_min") or nights[k].get("in_bed_min") or 0)
+    row, n = rows[i], nights[i]
+    t0 = datetime.fromisoformat(row.start)
+    segs = []
+    for st in sorted(row.data.get("stages") or [], key=lambda x: x.get("start") or ""):
+        try:
+            a, b = datetime.fromisoformat(st["start"]), datetime.fromisoformat(st["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if b > a:
+            segs.append({"stage": str(st.get("stage", "unknown")), "start_min": _r((a - t0).total_seconds() / 60, 1),
+                         "dur_min": _r((b - a).total_seconds() / 60, 1)})
+    n["segments"] = segs
+    n["span_min"] = n.get("in_bed_min")
+    return {"date": d.isoformat(), "night": n}
+
+
 def heart_rate(store: Store, start: date, end: date) -> dict[str, Any]:
     daily = _last_per_day(store.fetch("heart_rate_daily", start, end))
     resting = _last_per_day(store.fetch("resting_heart_rate", start, end))

@@ -89,3 +89,17 @@ def test_pdf_route(client):
     assert r.headers["cache-control"] == "no-store" and r.content.startswith(b"%PDF-")
     assert client.get("/api/v1/pdf/summary", params={"months": "7"}, headers=h).status_code == 422
     assert client.get("/api/v1/pdf/summary", params={"months": "x"}, headers=h).status_code == 422
+
+
+def test_night_segments(client):
+    store = client.app.state.store
+    store.upsert([{"type": "sleep_session", "id": "n1", "start": "2026-11-24T23:30:00-05:00",
+                   "end": "2026-11-25T07:00:00-05:00", "zone_offset": "-05:00", "data": {"stages": [
+                       {"start": "2026-11-25T01:00:00-05:00", "end": "2026-11-25T07:00:00-05:00", "stage": "light"},
+                       {"start": "2026-11-24T23:30:00-05:00", "end": "2026-11-25T01:00:00-05:00", "stage": "deep"}]}}],
+                 "test", allowed=ALL_TYPES)
+    from shc import queries
+    n = queries.night(store, D)["night"]
+    assert n["segments"] == [{"stage": "deep", "start_min": 0, "dur_min": 90}, {"stage": "light", "start_min": 90, "dur_min": 360}]
+    assert n["asleep_min"] == 450 and n["span_min"] == 450
+    assert queries.night(store, D - timedelta(days=5))["night"] is None

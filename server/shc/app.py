@@ -276,6 +276,9 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                     if reports.get(pf["week"]):
                         f, saved = pf, reports.get(pf["week"])
                 data = {"facts": f, **(saved or {})}
+            elif name == "night":
+                d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
+                data = await run_in_threadpool(queries.night, store, d)
             elif name == "status":
                 data = {"timezone": str(settings.tz), **await run_in_threadpool(store.status)}
             elif name == "trends":

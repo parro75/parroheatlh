@@ -2,74 +2,81 @@ package fr.parro.santesync
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
-import android.os.Build
-import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
-import fr.parro.santesync.ui.DiagnosticScreen
-import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.ActivityResultLauncher
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.net.toUri
+import androidx.fragment.app.FragmentActivity
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
-import fr.parro.santesync.ui.ActivityScreen
-import fr.parro.santesync.ui.HeartScreen
-import fr.parro.santesync.ui.HomeScreen
+import androidx.lifecycle.lifecycleScope
+import fr.parro.santesync.ui.ActivityDetail
+import fr.parro.santesync.ui.BodyDetail
+import fr.parro.santesync.ui.Detail
+import fr.parro.santesync.ui.DiagnosticScreen
+import fr.parro.santesync.ui.HeartDetail
+import fr.parro.santesync.ui.JournalScreen
+import fr.parro.santesync.ui.Num
+import fr.parro.santesync.ui.P
+import fr.parro.santesync.ui.ParroIcons
 import fr.parro.santesync.ui.ParroTheme
+import fr.parro.santesync.ui.PrimaryButton
+import fr.parro.santesync.ui.ProfileScreen
 import fr.parro.santesync.ui.SettingsActions
-import fr.parro.santesync.ui.SettingsScreen
-import fr.parro.santesync.ui.SleepScreen
+import fr.parro.santesync.ui.SleepDetail
+import fr.parro.santesync.ui.TodayScreen
 import fr.parro.santesync.ui.TrendsScreen
+import kotlinx.coroutines.launch
 
+/** Quatre onglets (26/11/2026) ; Sommeil, Cœur, Activité et Corps sont des pages de détail ouvertes depuis l'accueil. */
 private enum class Tab(val title: String, val icon: ImageVector) {
-    HOME("Accueil", Icons.Filled.Home),
-    SLEEP("Sommeil", Icons.Filled.Star),
-    HEART("Cœur", Icons.Filled.Favorite),
-    ACTIVITY("Activité", Icons.Filled.Place),
-    BODY("Corps", Icons.Filled.Person),
-    TRENDS("Tendances", Icons.Filled.DateRange),
-    SETTINGS("Réglages", Icons.Filled.Settings),
+    TODAY("Aujourd'hui", ParroIcons.today),
+    TRENDS("Tendances", ParroIcons.trends),
+    JOURNAL("Journal", ParroIcons.journal),
+    PROFILE("Profil", ParroIcons.profile),
 }
 
 class MainActivity : FragmentActivity() {
@@ -77,7 +84,10 @@ class MainActivity : FragmentActivity() {
     private lateinit var pickZip: ActivityResultLauncher<Array<String>>
     private lateinit var askNotifications: ActivityResultLauncher<String>
     private var resumeTick by mutableIntStateOf(0)
-    private var showDiagnostic by mutableStateOf(false)
+    private var refresh by mutableIntStateOf(0)
+    private var syncing by mutableStateOf(false)
+    private var detail by mutableStateOf<Detail?>(null)
+    private var detailArg by mutableStateOf<String?>(null)
 
     /** Verrouillage : l'interface est masquée tant que la biométrie n'a pas réussi. */
     private var locked by mutableStateOf(false)
@@ -95,6 +105,20 @@ class MainActivity : FragmentActivity() {
 
     private fun unlock() = authenticate("Déverrouiller Parro Health") { ok -> if (ok) locked = false }
 
+    /** Synchro manuelle au premier plan (tirer l'accueil vers le bas, pastille, Profil) puis rechargement des écrans. */
+    private fun syncNow() {
+        if (syncing) return
+        syncing = true
+        lifecycleScope.launch {
+            try {
+                Sync.run(applicationContext, Trigger.MANUAL)
+            } finally {
+                syncing = false
+                refresh++
+            }
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         val away = SystemClock.elapsedRealtime() - backgroundedAt
@@ -109,7 +133,6 @@ class MainActivity : FragmentActivity() {
         backgroundedAt = SystemClock.elapsedRealtime()
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -140,7 +163,7 @@ class MainActivity : FragmentActivity() {
                 startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=com.google.android.apps.healthdata".toUri()))
             },
             toast = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
-            openDiagnostic = { showDiagnostic = true },
+            openDiagnostic = { detail = Detail.DIAGNOSTIC },
             confirmBiometric = { cb -> authenticate("Activer le verrouillage", cb) },
             pickExportZip = {
                 if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -149,59 +172,71 @@ class MainActivity : FragmentActivity() {
         )
         // Planifie les synchros (horaire + matin) à chaque ouverture : rattrape les installations existantes.
         if (Prefs(this).isConfigured) SyncWorker.schedule(this)
-        val firstTab = if (Prefs(this).isConfigured) Tab.HOME else Tab.SETTINGS
+        val firstTab = if (Prefs(this).isConfigured) Tab.TODAY else Tab.PROFILE
         setContent {
             ParroTheme {
                 if (locked) {
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center,
+                    Column(Modifier.fillMaxSize().background(P.c.bg).padding(32.dp), verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Parro Health est verrouillée", style = MaterialTheme.typography.titleLarge)
-                        Button(onClick = ::unlock) { Text("Déverrouiller") }
+                        Icon(ParroIcons.heart, contentDescription = null, tint = P.c.heart)
+                        Num("Parro Health est verrouillée", 20.sp)
+                        PrimaryButton("Déverrouiller", ::unlock)
                     }
                     return@ParroTheme
                 }
                 var tab by rememberSaveable { mutableIntStateOf(firstTab.ordinal) }
-                var refresh by rememberSaveable { mutableIntStateOf(0) }
-                val current = Tab.entries[tab]
+                BackHandler(enabled = detail != null) { detail = null }
                 val toLogin = { OAuth.start(this) }
+                val close = { detail = null }
                 Scaffold(
-                    topBar = {
-                        TopAppBar(
-                            title = { Text(if (current == Tab.HOME) getString(R.string.app_name) else current.title) },
-                            actions = {
-                                if (current != Tab.SETTINGS) IconButton(onClick = { refresh++ }) {
-                                    Icon(Icons.Filled.Refresh, contentDescription = "Actualiser")
-                                }
-                                IconButton(onClick = { tab = Tab.SETTINGS.ordinal }) {
-                                    Icon(Icons.Filled.Settings, contentDescription = "Réglages")
-                                }
-                            },
-                        )
-                    },
+                    containerColor = P.c.bg,
                     bottomBar = {
-                        NavigationBar {
-                            Tab.entries.filter { it != Tab.SETTINGS }.forEach { t ->
-                                NavigationBarItem(
-                                    selected = t == current, onClick = { tab = t.ordinal },
-                                    icon = { Icon(t.icon, contentDescription = null) }, label = { Text(t.title) },
-                                )
+                        AnimatedVisibility(detail == null, enter = slideInVertically { it } + fadeIn(),
+                            exit = slideOutVertically { it } + fadeOut()) {
+                            NavigationBar(containerColor = P.c.bg, tonalElevation = 0.dp) {
+                                Tab.entries.forEach { t ->
+                                    NavigationBarItem(
+                                        selected = t.ordinal == tab, onClick = { tab = t.ordinal },
+                                        icon = { Icon(t.icon, contentDescription = null) },
+                                        label = { Text(t.title, fontSize = 11.sp) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = P.c.sleep, selectedTextColor = P.c.text, indicatorColor = P.c.sleepSoft,
+                                            unselectedIconColor = P.c.muted, unselectedTextColor = P.c.muted),
+                                    )
+                                }
                             }
                         }
                     },
                 ) { padding ->
-                    androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
+                    Box(Modifier.padding(padding).fillMaxSize().background(P.c.bg)) {
                         val key = refresh + resumeTick
-                        when (current) {
-                            Tab.HOME -> HomeScreen(key, toLogin)
-                            Tab.SLEEP -> SleepScreen(key, toLogin)
-                            Tab.HEART -> HeartScreen(key, toLogin)
-                            Tab.ACTIVITY -> ActivityScreen(key, toLogin)
-                            Tab.BODY -> fr.parro.santesync.ui.BodyScreen(key, toLogin)
-                            Tab.TRENDS -> TrendsScreen(key, toLogin)
-                            Tab.SETTINGS -> if (showDiagnostic) DiagnosticScreen(resumeTick,
-                                onRequestExtra = { requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) },
-                                onBack = { showDiagnostic = false })
-                            else SettingsScreen(actions, resumeTick) { refresh++ }
+                        AnimatedContent(
+                            targetState = detail to tab,
+                            transitionSpec = {
+                                when {
+                                    targetState.first != null && initialState.first == null ->
+                                        (slideInHorizontally(tween(260)) { it / 3 } + fadeIn(tween(260))) togetherWith fadeOut(tween(160))
+                                    targetState.first == null && initialState.first != null ->
+                                        fadeIn(tween(220)) togetherWith (slideOutHorizontally(tween(220)) { it / 3 } + fadeOut(tween(200)))
+                                    else -> fadeIn(tween(220)) togetherWith fadeOut(tween(120))
+                                }
+                            },
+                            label = "navigation",
+                        ) { (d, t) ->
+                            when (d) {
+                                Detail.SLEEP -> SleepDetail(key, toLogin, close)
+                                Detail.HEART -> HeartDetail(key, toLogin, close, detailArg)
+                                Detail.ACTIVITY -> ActivityDetail(key, toLogin, close)
+                                Detail.BODY -> BodyDetail(key, toLogin, close)
+                                Detail.DIAGNOSTIC -> DiagnosticScreen(resumeTick,
+                                    onRequestExtra = { requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) }, onBack = close)
+                                null -> when (Tab.entries[t]) {
+                                    Tab.TODAY -> TodayScreen(key, syncing, ::syncNow, toLogin) { dd, arg -> detailArg = arg; detail = dd }
+                                    Tab.TRENDS -> TrendsScreen(key, toLogin)
+                                    Tab.JOURNAL -> JournalScreen()
+                                    Tab.PROFILE -> ProfileScreen(actions, resumeTick, syncing, ::syncNow, toLogin) { refresh++ }
+                                }
+                            }
                         }
                     }
                 }

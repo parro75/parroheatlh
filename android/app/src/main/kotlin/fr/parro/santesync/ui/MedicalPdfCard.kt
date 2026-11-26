@@ -1,13 +1,13 @@
 package fr.parro.santesync.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,7 +15,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import fr.parro.santesync.MedicalPdf
@@ -27,36 +29,41 @@ import java.io.File
 @Composable
 fun MedicalPdfCard(onLogin: () -> Unit) {
     val ctx = LocalContext.current
+    val c = P.c
     val scope = rememberCoroutineScope()
     var months by rememberSaveable { mutableStateOf("3") }
     var busy by remember { mutableStateOf(false) }
     var file by remember { mutableStateOf<File?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    Section("Fiche pour le médecin (PDF)") {
-        Text("Résumé des mesures (sommeil, cœur, SpO2, poids, activité) avec les courbes de la période. " +
-            "Les notes du journal n'y figurent pas.", style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(6.dp))
-        Choices(MedicalPdf.MONTHS, months) { months = it; file = null; message = null }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = !busy, onClick = {
-                busy = true; message = null
-                scope.launch {
-                    try {
-                        val f = MedicalPdf.download(ctx, months.toInt())
-                        file = f
-                        if (!MedicalPdf.open(ctx, f)) message = "Aucun lecteur PDF : utilise « Partager »."
-                    } catch (_: NotLoggedInException) {
-                        onLogin()
-                    } catch (e: Exception) {
-                        message = "Échec : ${e.message ?: e.javaClass.simpleName}"
-                    } finally {
-                        busy = false
-                    }
-                }
-            }) { Text(if (busy) "Création…" else "Créer la fiche") }
-            file?.let { f -> OutlinedButton(onClick = { MedicalPdf.share(ctx, f) }) { Text("Partager") } }
+    ParroCard(gap = 12.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(c.heartSoft), contentAlignment = Alignment.Center) {
+                Icon(ParroIcons.doc, contentDescription = null, tint = c.heart, modifier = Modifier.size(20.dp))
+            }
+            Column(Modifier.weight(1f)) { CardTitle("Fiche pour le médecin", "PDF : mesures et courbes, sans tes notes du journal") }
         }
-        message?.let { Spacer(Modifier.height(4.dp)); Text(it, style = MaterialTheme.typography.bodySmall) }
+        Segmented(MedicalPdf.MONTHS, months, { months = it; file = null; message = null }, accent = c.heartSoft)
+        val f = file
+        if (f != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton("Ouvrir la fiche", { if (!MedicalPdf.open(ctx, f)) message = "Aucun lecteur PDF : utilise « Partager »." },
+                color = c.heart, modifier = Modifier.weight(1f))
+            SecondaryButton("Partager", { MedicalPdf.share(ctx, f) }, Modifier.weight(1f))
+        } else PrimaryButton(if (busy) "Création…" else "Créer la fiche (${months} mois)", {
+            busy = true; message = null
+            scope.launch {
+                try {
+                    val created = MedicalPdf.download(ctx, months.toInt())
+                    file = created
+                    if (!MedicalPdf.open(ctx, created)) message = "Aucun lecteur PDF : utilise « Partager »."
+                } catch (_: NotLoggedInException) {
+                    onLogin()
+                } catch (e: Exception) {
+                    message = "Échec : ${e.message ?: e.javaClass.simpleName}"
+                } finally {
+                    busy = false
+                }
+            }
+        }, enabled = !busy, color = c.heart)
+        message?.let { Muted(it) }
     }
 }
