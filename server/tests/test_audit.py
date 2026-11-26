@@ -58,3 +58,18 @@ def test_access_log_reserved_to_app(client):
     assert r.status_code == 200 and r.json()["chain"]["ok"] and r.json()["entries"]
     tok = client.app.state.oauth._issue("client-claude", ["health:read"], "f")
     assert client.get("/api/v1/access-log", headers={"Authorization": f"Bearer {tok.access_token}"}).status_code == 403
+
+
+def test_monthly_access_review(client):
+    from datetime import date, timedelta
+    h = {"Authorization": f"Bearer {app_login(client)['access_token']}"}
+    client.get("/api/v1/today", headers=h)
+    client.get("/api/v1/today")  # refus
+    log = client.app.state.audit
+    first = date.today().replace(day=1)
+    s = log.summary(first.isoformat(), (first + timedelta(days=40)).isoformat())
+    assert s["reads"].get("app", 0) >= 1 and s["refused"] >= 1 and s["totp_logins"] >= 1
+    r = client.get("/api/v1/report-job/access-review", headers=JOB).json()
+    assert r["due"] and "revue des accès" in r["title"] and "Journal : chaîne intacte" in r["message"]
+    assert client.post("/api/v1/report-job/access-review/ack", json={"month": r["month"]}, headers=JOB).status_code == 200
+    assert client.get("/api/v1/report-job/access-review", headers=JOB).json()["due"] is False

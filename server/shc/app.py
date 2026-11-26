@@ -543,6 +543,45 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         await run_in_threadpool(audit_log.ack, seq)
         return JSONResponse({"ack": seq})
 
+    # ---- revue mensuelle des accès (le mois écoulé), relayée par le job ; sans donnée de santé ---------
+    def _review(month_start: date) -> dict[str, Any]:
+        nxt = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        s = audit_log.summary(month_start.isoformat(), nxt.isoformat())
+        chain = audit_log.verify()
+        keys = provider.passkeys.list() if provider.passkeys else []
+        clients = provider._q("SELECT info FROM oauth_clients")
+        names = [json.loads(r[0]).get("client_name") or "?" for r in clients]
+        mois = f"{month_start.month:02d}/{month_start.year}"
+        lines = [
+            "Lectures : " + (", ".join(f"{k} {v}" for k, v in sorted(s["reads"].items())) or "aucune"),
+            f"Écritures du téléphone : {s['writes']} · refus : {s['refused']}",
+            f"Connexions : {len(s['logins'])} (dont {s['totp_logins']} par TOTP de secours)",
+            f"Appareils appairés : {len(phones.list())} · clés d'accès : {len(keys)} · clients OAuth : {', '.join(names) or 'aucun'}",
+            ("Événements sensibles : " + " ; ".join(s["sensitive"][:5])) if s["sensitive"] else "Aucun événement sensible",
+            "Journal : chaîne intacte" if chain["ok"] else f"⚠ Journal : CHAÎNE ROMPUE (ligne {chain.get('broken_at')})",
+            "Vérifie que chaque appareil et chaque clé est encore à toi (docs/conformite/revue-des-acces.md).",
+        ]
+        return {"month": month_start.strftime("%Y%m"), "title": f"Parro Health : revue des accès de {mois}",
+                "message": "\n".join(lines), "summary": s, "chain_ok": chain["ok"]}
+
+    @app.get("/api/v1/report-job/access-review")
+    async def access_review(request: Request) -> JSONResponse:
+        require_report_token(request)
+        today = datetime.now(settings.tz).date()
+        prev = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        due = audit_log.acked_key("revue") < int(prev.strftime("%Y%m"))
+        data = await run_in_threadpool(_review, prev) if due else {"month": prev.strftime("%Y%m")}
+        return JSONResponse({"due": due, **data}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/access-review/ack")
+    async def access_review_ack(request: Request) -> JSONResponse:
+        require_report_token(request)
+        m = (await json_body(request)).get("month")
+        if not (isinstance(m, str) and re.fullmatch(r"\d{6}", m)):
+            raise HTTPException(status_code=422, detail="month AAAAMM attendu")
+        await run_in_threadpool(audit_log.ack_key, "revue", int(m))
+        return JSONResponse({"ack": m})
+
     @app.post("/api/v1/report-job/notified")
     async def report_notified(request: Request) -> JSONResponse:
         require_report_token(request)

@@ -228,6 +228,12 @@ def watch(env: dict) -> int:
         notify(env, sec["title"], sec["message"])
         http("POST", f"{base}/api/v1/report-job/security-events/ack", {"seq": sec["last_seq"]}, auth)
         print(f"sécurité : {sec['count']} événement(s) relayé(s)")
+    # Revue mensuelle des accès (le mois écoulé), une seule fois par mois.
+    rev = http("GET", f"{base}/api/v1/report-job/access-review", headers=auth)
+    if rev.get("due"):
+        notify(env, rev["title"], rev["message"])
+        http("POST", f"{base}/api/v1/report-job/access-review/ack", {"month": rev["month"]}, auth)
+        print(f"revue des accès du mois {rev['month']} relayée")
     r = http("GET", f"{base}/api/v1/report-job/export-reminder", headers=auth)
     if r["action"] == "export_reminder":
         notify(env, r["title"], r["message"])

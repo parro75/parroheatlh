@@ -179,6 +179,21 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
                 color = if (paired.isNotEmpty()) c.good else c.warn)
             Muted("Prochaine synchro automatique : " + (nextRun?.let(::fmt) ?: "non planifiée"))
             PrimaryButton(if (syncing) "Synchronisation…" else "Synchroniser maintenant", onSync, enabled = !syncing)
+            var resend by remember { mutableStateOf(false) }
+            SecondaryButton("Renvoyer tout l'historique (1 an)", { resend = true }, Modifier.fillMaxWidth(), enabled = !syncing)
+            if (resend) androidx.compose.material3.AlertDialog(
+                onDismissRequest = { resend = false },
+                title = { Text("Renvoyer l'historique ?") },
+                text = { Text("Le téléphone renvoie jusqu'à un an de mesures Health Connect au serveur. Utile après une " +
+                    "restauration du serveur : rien n'est perdu ni dupliqué (les envois sont idempotents).") },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                    resend = false
+                    prefs.lastSync = null; prefs.changesToken = null; prefs.calcVersion = 0 // tout relire, FC au repos comprise
+                    onSync()
+                }) { Text("Renvoyer") } },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = { resend = false }) { Text("Annuler") } },
+                containerColor = c.surface,
+            )
             if (exempt) Muted("✓ Exemptée de l'optimisation de batterie : Android ne retardera pas la synchro.")
             else {
                 Muted("Android peut retarder la synchro tant que l'app est soumise à l'optimisation de batterie.")

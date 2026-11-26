@@ -83,6 +83,41 @@ class AuditLog:
             self._conn.execute("INSERT INTO audit_ack (key, seq) VALUES ('alertes', ?) "
                                "ON CONFLICT (key) DO UPDATE SET seq = MAX(seq, excluded.seq)", (int(seq),))
 
+    def summary(self, start_iso: str, end_iso: str) -> dict[str, Any]:
+        """Bilan d'une période (revue des accès) : compteurs seulement, aucune donnée de santé."""
+        with self._lock:
+            rows = self._conn.execute("SELECT actor, action, detail, status FROM access_log WHERE ts >= ? AND ts < ?",
+                                      (start_iso, end_iso)).fetchall()
+        reads: dict[str, int] = {}
+        writes = refused = 0
+        logins: list[str] = []
+        sensitive: list[str] = []
+        for actor, action, detail, status in rows:
+            who = "Claude" if actor.startswith("claude") else {"app": "app", "job": "rapport", "ha": "Home Assistant"}.get(actor, actor)
+            if status >= 400:
+                refused += 1
+            elif action.startswith("GET ") or action.startswith("mcp "):
+                reads[who] = reads.get(who, 0) + 1
+            elif action.startswith(("POST /ingest", "PUT /ingest")):
+                writes += 1
+            if action == "connexion":
+                logins.append(detail or "")
+            elif action in ("appairage", "cle-ajoutee", "cle-supprimee", "client-enregistre", "jeton-rejoue",
+                            "connexion-verrouillee"):
+                sensitive.append(f"{action} {detail or ''}".strip())
+        return {"lines": len(rows), "reads": reads, "writes": writes, "refused": refused,
+                "logins": logins, "totp_logins": sum("TOTP" in x for x in logins), "sensitive": sensitive}
+
+    def acked_key(self, key: str) -> int:
+        with self._lock:
+            r = self._conn.execute("SELECT seq FROM audit_ack WHERE key = ?", (key,)).fetchone()
+        return r[0] if r else 0
+
+    def ack_key(self, key: str, value: int) -> None:
+        with self._lock:
+            self._conn.execute("INSERT INTO audit_ack (key, seq) VALUES (?, ?) "
+                               "ON CONFLICT (key) DO UPDATE SET seq = MAX(seq, excluded.seq)", (key, int(value)))
+
     def last_seq(self) -> int:
         with self._lock:
             r = self._conn.execute("SELECT MAX(seq) FROM access_log").fetchone()

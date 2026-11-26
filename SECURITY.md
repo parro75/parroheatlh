@@ -1,7 +1,9 @@
 # Sécurité
 
 Parro Health manipule des **données de santé réelles**. Ce document résume le modèle de menace et les
-protections en place ; le détail est dans le [README](README.md#données-et-confidentialité).
+protections en place ; le détail est dans le [README](README.md#données-et-confidentialité), et la démarche
+« au plus près de HDS » (analyse de risques, registre, incidents, continuité, revue des accès) dans
+[`docs/conformite/`](docs/conformite/README.md).
 
 ## Signaler une faille
 
@@ -14,6 +16,7 @@ GitHub) sur ce dépôt. Réponse sous quelques jours.
 |---|---|
 | Écoute du réseau | HTTPS partout ; service sans réseau, joint par socket Unix ; trafic en clair interdit dans l'app |
 | Écriture avec un jeton volé | chaque écriture est **signée** par une clé ECDSA P-256 du Keystore matériel du téléphone appairé (appairage par l'app seulement, après mot de passe + TOTP) ; horodatage ± 5 min, anti-rejeu ; le jeton seul est refusé |
+| Usurpation de la connexion | mot de passe + **clé d'accès WebAuthn** (passkey, clé FIDO2 ; résiste à l'hameçonnage), TOTP en secours tracé et signalé |
 | Accès non autorisé à l'API | 4 jetons distincts (écriture, lecture OAuth, job, Home Assistant), comparés en temps constant ; OAuth 2.1 + PKCE, mot de passe (scrypt) + TOTP anti-rejeu, verrouillage après 5 échecs ; jetons stockés hachés, rotation et révocation de famille sur rejeu |
 | Exposition des routes | proxy qui n'ouvre que les routes listées ; MCP limité aux IP d'Anthropic ; routes du job et de Home Assistant sur un nom interne seulement |
 | Vol ou recyclage du disque du serveur | base dans un volume LUKS2 dont la clé n'est jamais sur le serveur (`deploy/volume-chiffre/`) ; refus de démarrer si le volume n'est pas monté ; aucun swap pour le service |
@@ -23,6 +26,7 @@ GitHub) sur ce dépôt. Réponse sous quelques jours.
 | Appli malveillante sur le téléphone | composants exportés réduits au nécessaire ; import d'un zip partagé seulement après confirmation ; FileProvider non exporté ; PKCE contre le détournement du retour OAuth |
 | Injection de consignes (prompt injection) | textes libres plafonnés (note 500, titre 200 caractères) et déclarés comme des **données** à Claude (MCP) et au modèle local ; les signaux des rapports sont calculés par règles, jamais par le modèle |
 | Fichiers piégés | export reçu par morceaux, taille et SHA-256 vérifiés, lu en flux sans extraction, JSON géants ignorés ; écrasé puis supprimé après import |
+| Accès non tracé | **journal des accès** chaîné (SHA-256, 1 an) : qui, quoi, quand, d'où ; consultable dans l'app ; alertes et revue mensuelle automatique |
 | Secrets dans le dépôt | aucun (`.env`, bases, APK ignorés) ; historique vérifié par gitleaks |
 
 ## Limites connues (assumées)
