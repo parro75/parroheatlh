@@ -27,18 +27,10 @@ sante.example.org {
 		reverse_proxy unix//run/sante/shc.sock
 	}
 
-	# Job de rapport et Home Assistant (FACULTATIFS) : jetons dédiés ET seulement depuis tes réseaux.
-	# ⚠️ Remplacer la plage d'exemple par l'adresse d'où partent le job et Home Assistant (VPN, IP fixe…).
-	# Ces blocs passent AVANT @app : sans eux, /api/v1/* les ouvrirait à tout Internet.
-	@interne {
-		path /api/v1/report-job/* /api/v1/ha/*
-		remote_ip 192.0.2.0/24
-	}
+	# Job de rapport et Home Assistant : jamais par le nom public (voir le vhost interne en bas).
+	# Ce bloc passe AVANT @app, sinon /api/v1/* les ouvrirait à tout Internet.
+	@interne path /api/v1/report-job/* /api/v1/ha/*
 	handle @interne {
-		reverse_proxy unix//run/sante/shc.sock
-	}
-	@interne_refuse path /api/v1/report-job/* /api/v1/ha/*
-	handle @interne_refuse {
 		respond 404
 	}
 
@@ -72,6 +64,22 @@ sante.example.org {
 		reverse_proxy unix//run/sante/shc.sock
 	}
 
+	handle {
+		respond 404
+	}
+}
+
+# Nom INTERNE, facultatif : job de rapport et Home Assistant, joignables seulement depuis tes réseaux
+# (VPN, LAN). Le DNS interne fait pointer ce nom vers l'adresse VPN du serveur ; certificat par DNS-01.
+# ⚠️ Adapter les plages à tes réseaux.
+sante.lan.example.org {
+	import tls_dns
+	@offnet not remote_ip 10.0.0.0/8 192.168.0.0/16
+	respond @offnet 403
+	@interne path /api/v1/report-job/* /api/v1/ha/*
+	handle @interne {
+		reverse_proxy unix//run/sante/shc.sock
+	}
 	handle {
 		respond 404
 	}

@@ -158,8 +158,8 @@ Job de rapport (facultatif) : copier `jobs/rapport_ia.py` dans `/opt/parro-rappo
 `jobs/*.service|timer` dans systemd, et créer `/etc/parro-sante/rapport.env` (mode 600) avec `SANTE_URL` et
 `REPORT_TOKEN` ; facultatifs : `OLLAMA_URL`, `MODEL` (défaut `mistral-nemo:12b`), `OWNER_NAME` (prénom par
 lequel le modèle s'adresse à toi), `ALERT_WEBHOOK_URL` (ou `HA_WEBHOOK_URL`). `rapport_ia.py --apercu [modèle]`
-rédige le rapport du jour sans l'enregistrer. Le bloc Caddy n'ouvre les routes du job et de Home Assistant
-qu'à une plage d'adresses à adapter.
+rédige le rapport du jour sans l'enregistrer. Les routes du job et de Home Assistant ne passent jamais par le
+nom public : `deploy/Caddyfile.sante` les sert sur un **nom interne** réservé à tes réseaux (VPN, LAN).
 
 ### Tests
 
