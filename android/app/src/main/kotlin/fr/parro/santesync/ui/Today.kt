@@ -54,7 +54,7 @@ data class TodayData(
     val heart: JSONObject, val recovery: JSONObject, val body: JSONObject, val stress: JSONObject,
 )
 
-enum class Detail { SLEEP, HEART, ACTIVITY, BODY, DIAGNOSTIC }
+enum class Detail { SLEEP, HEART, ACTIVITY, BODY, DIAGNOSTIC, ACCESS }
 
 /** Nuit principale de chaque jour de réveil (la plus longue : une sieste ne la remplace pas). */
 fun nightsByDate(sleep: JSONObject): Map<String, JSONObject> =

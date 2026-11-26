@@ -59,6 +59,7 @@ class SettingsActions(
     /** Vérifie la biométrie avant d'activer le verrouillage ; appelle onResult(true) si réussi. */
     val confirmBiometric: (onResult: (Boolean) -> Unit) -> Unit,
     val pickExportZip: () -> Unit,
+    val openAccessLog: () -> Unit,
 )
 
 private fun fmt(ms: Long): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -197,6 +198,8 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
             }
             Divider()
             NavRow("Diagnostic Health Connect", "ce que les applis publient vraiment", actions.openDiagnostic)
+            Divider()
+            NavRow("Journal des accès", "qui a lu ou écrit tes données, quand et d'où", actions.openAccessLog)
         }
 
         ServerCard(prefs, actions, loggedIn, { tick++ }, onLoginChanged)

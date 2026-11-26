@@ -173,6 +173,7 @@ class MainActivity : FragmentActivity() {
             },
             toast = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
             openDiagnostic = { detail = Detail.DIAGNOSTIC },
+            openAccessLog = { detail = Detail.ACCESS },
             confirmBiometric = { cb -> authenticate("Activer le verrouillage", cb) },
             pickExportZip = {
                 if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -238,6 +239,7 @@ class MainActivity : FragmentActivity() {
                                 Detail.HEART -> HeartDetail(key, toLogin, close, detailArg)
                                 Detail.ACTIVITY -> ActivityDetail(key, toLogin, close)
                                 Detail.BODY -> BodyDetail(key, toLogin, close)
+                                Detail.ACCESS -> fr.parro.santesync.ui.AccessLogScreen(key, toLogin, close)
                                 Detail.DIAGNOSTIC -> DiagnosticScreen(resumeTick,
                                     onRequestExtra = { LockGuard.leaving(); requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) }, onBack = close)
                                 null -> when (Tab.entries[t]) {
