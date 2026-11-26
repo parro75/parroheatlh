@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 import re
+from urllib.parse import parse_qsl
 import json
 import logging
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -23,7 +25,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, devices, ha, pdf, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, audit, config, devices, ha, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -59,8 +61,41 @@ DateArg = Annotated[str | None, Field(description="AAAA-MM-JJ (inclus)", pattern
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
+class AuditMiddleware:
+    """Une ligne du journal des accès par requête sur l'API, l'ingestion et les routes internes (ASGI pur).
+    L'acteur est posé par les contrôles d'authentification (request.state.actor) ; sans lui : « inconnu »."""
+
+    PREFIXES = ("/api/v1/", "/ingest")
+
+    def __init__(self, app, log: "audit.AuditLog"):
+        self.app, self.log = app, log
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope["path"].startswith(self.PREFIXES):
+            return await self.app(scope, receive, send)
+        status = {"code": 500}
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            st = scope.get("state") or {}
+            headers = {k.decode().lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+            ip = (headers.get("x-forwarded-for") or (scope.get("client") or ("",))[0] or "").split(",")[0].strip()
+            path = re.sub(r"/ingest-export/[0-9a-f]{32}", "/ingest-export/{id}", scope["path"])
+            q = {k: v for k, v in parse_qsl(scope.get("query_string", b"").decode("latin-1"))
+                 if k in ("start", "end", "date", "metric", "period", "months", "limit")}
+            detail = st.get("audit_detail") or " ".join(f"{k}={v}" for k, v in q.items())
+            await run_in_threadpool(self.log.record, st.get("actor", "inconnu"), f"{scope['method']} {path}",
+                                    detail, ip, status["code"])
+
+
 def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider,
-              reports: report.ReportStore) -> MCPServer:
+              reports: report.ReportStore, audit_log: "audit.AuditLog") -> MCPServer:
     mcp = MCPServer(
         name="samsung-health",
         version=__version__,
@@ -80,7 +115,12 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     mcp.custom_route("/login", methods=["GET"], include_in_schema=False)(provider.login_get)
     mcp.custom_route("/login", methods=["POST"], include_in_schema=False)(provider.login_post)
 
+    def mcp_audit(tool: str, detail: str = "") -> None:
+        tok = get_access_token()
+        audit_log.record(provider.actor_label(tok.client_id) if tok else "inconnu", f"mcp {tool}", detail)
+
     def run(fn: Callable[..., dict[str, Any]], start: str | None, end: str | None) -> dict[str, Any]:
+        mcp_audit(fn.__name__, f"start={start or ''} end={end or ''}")
         today = datetime.now(settings.tz).date()
         try:
             d0, d1 = queries.date_range(start, end, today)
@@ -152,6 +192,7 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     ) -> dict[str, Any]:
         """Tendance longue d'une métrique : moyenne, min et max des valeurs quotidiennes par semaine,
         mois ou année (jusqu'à 20 ans ; par défaut les 12 derniers mois)."""
+        mcp_audit("trends", f"metric={metric} period={period} start={start or ''} end={end or ''}")
         today = datetime.now(settings.tz).date()
         try:
             d0, d1 = queries.trend_range(start, end, today)
@@ -163,6 +204,7 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     def get_weekly_report(day: DateArg = None) -> dict[str, Any]:
         """Bilan de la semaine (lundi → dimanche) contenant ce jour, comparé aux 4 semaines précédentes :
         sommeil, régularité du réveil, FC au repos, pas, séances, stress, journal ; texte du dimanche soir."""
+        mcp_audit("weekly_report", f"day={day or ''}")
         d = date.fromisoformat(day) if day else datetime.now(settings.tz).date()
         f = report.weekly_facts(store, d)
         return {"facts": f, **(reports.get(f["week"]) or {})}
@@ -178,6 +220,7 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     def get_daily_report(day: DateArg = None) -> dict[str, Any]:
         """Bilan du jour (nuit, FC au repos, HRV, activité d'hier, SpO2) comparé aux moyennes personnelles,
         avec les signaux calculés par règles et le texte rédigé chaque matin par l'IA locale."""
+        mcp_audit("daily_report", f"day={day or ''}")
         d = queries.date_range(day, day, datetime.now(settings.tz).date())[0] if day else datetime.now(settings.tz).date()
         return {"facts": report.facts(store, d), **(reports.get(d.isoformat()) or {})}
 
@@ -185,6 +228,7 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     def get_sync_status() -> dict[str, Any]:
         """Dernière synchronisation reçue du téléphone et, par type de donnée, nombre d'enregistrements
         et premier/dernier jour couverts."""
+        mcp_audit("sync_status")
         return {"timezone": str(settings.tz), **store.status()}
 
     return mcp
@@ -218,8 +262,11 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         return {k: {"candidates": c, "written": w} for k, (c, w) in res.items()}
 
     phones = devices.Devices(settings.db_path)
+    audit_log = audit.AuditLog(settings.db_path, settings.audit_retention_days)
+    audit_log.purge()
+    provider.audit = audit_log
     exports = uploads.Uploads(settings.db_path, os.path.join(os.path.dirname(settings.db_path), "uploads"), run_import)
-    mcp = build_mcp(store, settings, provider, reports)
+    mcp = build_mcp(store, settings, provider, reports, audit_log)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
         allowed_hosts=settings.allowed_hosts,
@@ -243,12 +290,15 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         watch.close()
         exports.close()
         phones.close()
+        audit_log.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.oauth = provider
     app.state.phones = phones
+    app.state.audit = audit_log
+    app.add_middleware(AuditMiddleware, log=audit_log)
     expected = f"Bearer {settings.ingest_token}".encode()
 
     @app.get("/healthz")
@@ -262,6 +312,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         access = await provider.load_access_token(token) if token else None
         if access is None or SCOPE not in access.scopes:
             raise HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        request.state.actor = provider.actor_label(access.client_id)
         return access
 
     api_ranges: dict[str, Callable[..., dict[str, Any]]] = {
@@ -273,11 +324,18 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/{name}")
     async def api_read(name: str, request: Request) -> JSONResponse:
-        await require_token(request)
+        access = await require_token(request)
         q = request.query_params
         today = datetime.now(settings.tz).date()
         try:
-            if name == "today":
+            if name == "access-log":
+                # Journal des accès : consultable par l'app seulement (pas par Claude).
+                if access.client_id != settings.app_client_id:
+                    raise HTTPException(status_code=403, detail="journal réservé à l'app")
+                limit = int(q.get("limit", "200")) if q.get("limit", "200").isdigit() else 200
+                data = {"chain": await run_in_threadpool(audit_log.verify),
+                        "entries": await run_in_threadpool(audit_log.entries, limit)}
+            elif name == "today":
                 data = await run_in_threadpool(queries.today, store, today)
             elif name == "report":
                 d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
@@ -326,6 +384,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except devices.DeviceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         log.info("appareil appairé : %s", did)
+        audit_log.record("app", "appairage", f"appareil {did[:8]} « {str(b.get('label', ''))[:40]} »",
+                         (request.headers.get("x-forwarded-for") or "").split(",")[0].strip())
         return JSONResponse({"device_id": did, "mode": settings.device_signature}, headers={"Cache-Control": "no-store"})
 
     # ---- fiche PDF pour un rendez-vous médical : générée en mémoire, jamais écrite sur le disque ----------
@@ -351,6 +411,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), ha_auth):
             raise HTTPException(status_code=401, detail="unauthorized")
+        request.state.actor = "ha"
         data = await run_in_threadpool(ha.summary, store, reports, datetime.now(settings.tz).date())
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
@@ -362,6 +423,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), report_auth):
             raise HTTPException(status_code=401, detail="unauthorized")
+        request.state.actor = "job"
 
     @app.get("/api/v1/report-job/pending")
     async def report_pending(request: Request) -> JSONResponse:
@@ -438,6 +500,35 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             "narrative": saved.get("narrative"), "fallback": report.weekly_fallback(f), "facts": f,
         }, headers={"Cache-Control": "no-store"})
 
+    # ---- alertes de sécurité (journal des accès) relayées par le job de surveillance, sans donnée de santé ----
+    ALERT_TEXT = {
+        "appairage": "Nouvel appareil appairé : {detail}",
+        "connexion": "Connexion réussie {detail} (IP {ip})",
+        "connexion-verrouillee": "Connexion bloquée après plusieurs échecs",
+        "jeton-rejoue": "Jeton rejoué, session révoquée ({actor})",
+        "client-enregistre": "Nouveau client OAuth : {detail}",
+        "ecriture-refusee": "Écriture refusée : {detail} (IP {ip})",
+    }
+
+    @app.get("/api/v1/report-job/security-events")
+    async def security_events(request: Request) -> JSONResponse:
+        require_report_token(request)
+        ev = await run_in_threadpool(audit_log.alerts_after, audit_log.acked())
+        lines = [ALERT_TEXT[e["action"]].format(**{k: (v or "?") for k, v in e.items()}) for e in ev]
+        return JSONResponse({"count": len(ev), "last_seq": ev[-1]["seq"] if ev else audit_log.acked(),
+                             "title": f"Parro Health : sécurité ({len(ev)} événement{'s' if len(ev) > 1 else ''})",
+                             "message": "\n".join(lines[-6:]) + (f"\n… et {len(lines) - 6} autres" if len(lines) > 6 else "")},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/security-events/ack")
+    async def security_events_ack(request: Request) -> JSONResponse:
+        require_report_token(request)
+        seq = (await json_body(request)).get("seq")
+        if not isinstance(seq, int):
+            raise HTTPException(status_code=422, detail="seq entier attendu")
+        await run_in_threadpool(audit_log.ack, seq)
+        return JSONResponse({"ack": seq})
+
     @app.post("/api/v1/report-job/notified")
     async def report_notified(request: Request) -> JSONResponse:
         require_report_token(request)
@@ -449,6 +540,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     def require_ingest(request: Request) -> None:
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
             raise HTTPException(status_code=401, detail="unauthorized")
+        request.state.actor = "jeton-ecriture"
 
     def require_device(request: Request, body: bytes) -> None:
         """Écriture : en plus du jeton, signature d'un téléphone appairé (obligatoire en mode required)."""
@@ -458,9 +550,15 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             did = phones.verify(request.method, request.url.path, request.headers, body)
         except devices.DeviceError as exc:
             log.warning("écriture refusée : %s", exc)
+            ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+            audit_log.record("jeton-ecriture", "ecriture-refusee", f"{request.url.path} : {exc}", ip, 401)
             raise HTTPException(status_code=401, detail=f"signature de l'appareil : {exc}") from None
         if did is None and settings.device_signature == "required":
+            ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+            audit_log.record("jeton-ecriture", "ecriture-refusee", f"{request.url.path} : sans signature", ip, 401)
             raise HTTPException(status_code=401, detail="signature de l'appareil exigée (appairer l'app)")
+        if did is not None:
+            request.state.actor = f"appareil:{did[:8]}"
 
     async def require_write(request: Request) -> bytes:
         require_ingest(request)
@@ -502,6 +600,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         auth = request.headers.get("authorization", "").encode()
         if not hmac.compare_digest(auth, expected):
             raise HTTPException(status_code=401, detail="unauthorized")
+        request.state.actor = "jeton-ecriture"
         if int(request.headers.get("content-length") or 0) > MAX_BODY:
             raise HTTPException(status_code=413, detail="payload too large")
         body = await request.body()
@@ -523,6 +622,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except RecordError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         log.info("ingest: %d enregistrements", n)
+        request.state.audit_detail = f"{len(records)} reçus, {n} écrits"
         return JSONResponse({"accepted": n})
 
     # Tout le reste (MCP, OAuth, /login) part vers l'application MCP ; un chemin inconnu = 404.

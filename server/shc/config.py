@@ -29,6 +29,7 @@ class Settings:
     report_deadline_hour: int = 12  # sans nuit reçue à cette heure, le rapport part quand même
     # Écritures signées par le téléphone (shc.devices) : off | optional (vérifiée si présente) | required
     device_signature: str = "optional"
+    audit_retention_days: int = 365  # journal des accès (traçabilité)
 
     @property
     def mcp_path(self) -> str:
@@ -82,6 +83,7 @@ def load() -> Settings:
         ha_token=_ha_token(ingest),
         report_deadline_hour=int(os.environ.get("REPORT_DEADLINE_HOUR", "12")),
         device_signature=_device_signature(),
+        audit_retention_days=int(os.environ.get("AUDIT_RETENTION_DAYS", "365")),
     )
 
 

@@ -6,6 +6,8 @@
   revoke-all      révoque tous les jetons OAuth émis (Claude devra se reconnecter)
   devices         liste les téléphones appairés (écritures signées)
   revoke-device ID   révoque un téléphone (perdu, remplacé) : ses écritures sont refusées
+  journal [N]        affiche les N dernières lignes du journal des accès (50 par défaut)
+  journal-verifier   recalcule la chaîne du journal : signale toute ligne modifiée ou supprimée
 """
 
 from __future__ import annotations
@@ -51,6 +53,16 @@ def main(argv: list[str]) -> None:
         conn = sqlite3.connect(os.environ.get("DB_PATH", "/data/health.db"), isolation_level=None)
         n = conn.execute("DELETE FROM oauth_tokens").rowcount
         print(f"{n} jeton(s) révoqué(s).")
+    elif cmd in ("journal", "journal-verifier"):
+        from .audit import AuditLog
+        a = AuditLog(os.environ.get("DB_PATH", "/data/health.db"))
+        if cmd == "journal-verifier":
+            v = a.verify()
+            print("chaîne intacte" if v["ok"] else f"⚠ CHAÎNE ROMPUE à la ligne {v['broken_at']}", f"({v['entries']} lignes)")
+            raise SystemExit(0 if v["ok"] else 1)
+        n = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 50
+        for e in reversed(a.entries(n)):
+            print(f"{e['seq']:>7} {e['ts']} {e['status']} {e['actor']:<22} {e['action']:<34} {e['ip'] or '-':<15} {e['detail'] or ''}")
     elif cmd in ("devices", "revoke-device"):
         from .devices import Devices
         d = Devices(os.environ.get("DB_PATH", "/data/health.db"))

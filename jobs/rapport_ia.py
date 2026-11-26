@@ -11,7 +11,8 @@ Toutes les 10 min entre 4 h et 13 h (timer systemd) :
   3. POST {SANTE_URL}/api/v1/report-job/notified (rapport prêt). C'est l'appli Parro Health qui l'annonce
      (notification locale après sa synchro) : aucun service tiers ne voit le texte.
 
---surveillance (toutes les 30 min) : alerte si le téléphone ne synchronise plus, rappel mensuel d'export.
+--surveillance (toutes les 30 min) : alerte si le téléphone ne synchronise plus, rappel mensuel d'export,
+alertes de sécurité du journal des accès (nouvel appareil, connexion, échecs, écriture refusée).
 Ces alertes (sans donnée de santé) partent vers un webhook FACULTATIF qui reçoit {"title", "message"} en
 JSON — par exemple un webhook Home Assistant. Sans webhook, elles sont seulement écrites dans le journal.
 
@@ -221,6 +222,12 @@ def watch(env: dict) -> int:
              {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
         print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
     weekly(env, base, auth)
+    # Sécurité (journal des accès) : nouvel appareil, connexion, échecs, écriture refusée… sans donnée de santé.
+    sec = http("GET", f"{base}/api/v1/report-job/security-events", headers=auth)
+    if sec["count"]:
+        notify(env, sec["title"], sec["message"])
+        http("POST", f"{base}/api/v1/report-job/security-events/ack", {"seq": sec["last_seq"]}, auth)
+        print(f"sécurité : {sec['count']} événement(s) relayé(s)")
     r = http("GET", f"{base}/api/v1/report-job/export-reminder", headers=auth)
     if r["action"] == "export_reminder":
         notify(env, r["title"], r["message"])

@@ -87,6 +87,19 @@ class HealthOAuthProvider:
         # Clients déclarés par configuration (l'app Android) : jamais créés par /register.
         self.static_clients = {c.client_id: c for c in (static_clients or [])}
         self.static_redirects = {str(u) for c in self.static_clients.values() for u in (c.redirect_uris or [])}
+        self.audit = None  # shc.audit.AuditLog, posé par create_app (journal des accès)
+
+    def _a(self, *args, **kw) -> None:
+        if self.audit is not None:
+            self.audit.record(*args, **kw)
+
+    def actor_label(self, client_id: str) -> str:
+        """« app » pour le client de l'app, « claude:<nom> » pour un client enregistré (Claude)."""
+        if client_id in self.static_clients:
+            return "app"
+        rows = self._q("SELECT info FROM oauth_clients WHERE client_id = ?", (client_id,))
+        name = json.loads(rows[0][0]).get("client_name") if rows else None
+        return f"claude:{(name or client_id)[:40]}"
 
     # ---- outils --------------------------------------------------------
     def _q(self, sql: str, args: tuple = ()) -> list[tuple]:
@@ -122,6 +135,7 @@ class HealthOAuthProvider:
         self._x("INSERT INTO oauth_clients (client_id, info, created_at) VALUES (?, ?, ?)",
                 (client_info.client_id, client_info.model_dump_json(), time.time()))
         log.info("client enregistré : %s (%s)", client_info.client_id, client_info.client_name)
+        self._a("claude", "client-enregistre", f"{client_info.client_name or '?'} ({client_info.client_id[:12]})")
 
     # ---- autorisation --------------------------------------------------
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
@@ -160,6 +174,7 @@ class HealthOAuthProvider:
             self._set_state("lock_until", time.time() + LOCK_SECONDS)
             failures = 0
             log.warning("connexion verrouillée %d s après %d échecs", LOCK_SECONDS, MAX_FAILURES)
+            self._a("systeme", "connexion-verrouillee", f"{MAX_FAILURES} échecs : connexion bloquée {LOCK_SECONDS // 60} min", status=429)
         self._set_state("failures", failures)
 
     def check_owner(self, password: str, code: str, now: float | None = None) -> bool:
@@ -225,6 +240,7 @@ class HealthOAuthProvider:
             raise TokenError("invalid_grant", "code déjà utilisé")
         self._purge()
         log.info("jetons émis pour le client %s", client.client_id)
+        self._a(self.actor_label(client.client_id), "jetons-emis", "connexion OAuth terminée")
         return self._issue(client.client_id, authorization_code.scopes, secrets.token_hex(16))
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
@@ -238,6 +254,7 @@ class HealthOAuthProvider:
             # Jeton de rafraîchissement rejoué après rotation : vol probable, toute la famille saute.
             self._x("DELETE FROM oauth_tokens WHERE family = ?", (family,))
             log.warning("réutilisation d'un jeton de rafraîchissement : famille %s révoquée", family)
+            self._a(self.actor_label(client.client_id), "jeton-rejoue", "jeton de rafraîchissement réutilisé : session révoquée", status=401)
             return None
         return RefreshToken(token=refresh_token, client_id=client.client_id, scopes=json.loads(scopes),
                             expires_at=int(expires_at), subject=SUBJECT)
@@ -265,6 +282,7 @@ class HealthOAuthProvider:
         rows = self._q("SELECT family FROM oauth_tokens WHERE hash = ?", (token_hash(token.token),))
         if rows:
             self._x("DELETE FROM oauth_tokens WHERE family = ?", (rows[0][0],))
+            self._a(self.actor_label(token.client_id), "jetons-revoques", "déconnexion")
 
     def revoke_all(self) -> int:
         return self._x("DELETE FROM oauth_tokens")
@@ -327,11 +345,14 @@ input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;ma
         label, host = await self._client_label(client_id), urlparse(str(params.redirect_uri)).netloc
         if (wait := self.locked_for()) > 0:
             return self._page(f"<p class='err'>Trop d'essais. Réessaie dans {wait // 60 + 1} min.</p>", 429)
+        ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
         if not self.check_owner(form.get("password", ""), form.get("code", "")):
             log.warning("échec de connexion (client %s)", client_id)
+            self._a("inconnu", "connexion-echec", f"pour {label}", ip=ip, status=401)
             return self._form(req_id, label, host, "Mot de passe ou code incorrect.")
         target = self.issue_code(req_id)
         if target is None:
             return self._page("<p>Demande déjà utilisée.</p>", 400)
         log.info("connexion réussie, code émis pour le client %s", client_id)
+        self._a("proprietaire", "connexion", f"pour {label}", ip=ip)
         return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
