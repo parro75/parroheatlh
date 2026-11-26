@@ -256,12 +256,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     # ---- API de lecture de l'app (jeton OAuth, portée health:read) ------------------------------
-    async def require_token(request: Request) -> None:
+    async def require_token(request: Request):
         auth = request.headers.get("authorization", "")
         token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
         access = await provider.load_access_token(token) if token else None
         if access is None or SCOPE not in access.scopes:
             raise HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        return access
 
     api_ranges: dict[str, Callable[..., dict[str, Any]]] = {
         "steps": queries.daily_steps, "sleep": queries.sleep, "heart_rate": queries.heart_rate,
@@ -315,7 +316,10 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     # ---- appairage d'un téléphone : clé publique ECDSA P-256 (clé privée dans son Keystore matériel) ----
     @app.post("/api/v1/device")
     async def device_register(request: Request) -> JSONResponse:
-        await require_token(request)  # jeton OAuth : mot de passe + TOTP ont été saisis
+        access = await require_token(request)  # jeton OAuth : mot de passe + TOTP ont été saisis
+        if access.client_id != settings.app_client_id:
+            # Seule l'app peut appairer un appareil (pas le jeton de Claude, trouvé au pentest du 26/11).
+            raise HTTPException(status_code=403, detail="appairage réservé à l'app Parro Health")
         b = await json_body(request)
         try:
             did = await run_in_threadpool(phones.register, str(b.get("public_key", "")), str(b.get("label", "")))

@@ -52,6 +52,15 @@ def test_pairing_requires_oauth_and_p256(client):
     assert client.post("/api/v1/device", json={"public_key": "pas une clé"}, headers=h).status_code == 422
 
 
+def test_pairing_refused_with_claude_token(client):
+    """Un jeton OAuth émis pour Claude (autre client) ne peut pas appairer un appareil."""
+    tok = client.app.state.oauth._issue("client-claude", ["health:read"], "famille-test")
+    _, pub, _ = new_key()
+    h = {"Authorization": f"Bearer {tok.access_token}"}
+    assert client.post("/api/v1/device", json={"public_key": pub}, headers=h).status_code == 403
+    assert client.get("/api/v1/status", headers=h).status_code == 200  # la lecture, elle, reste permise
+
+
 def test_optional_mode(client):
     key, did, _ = pair(client)
     assert client.post("/ingest", content=BODY, headers={**AUTH, "Content-Type": "application/json"}).status_code == 200
