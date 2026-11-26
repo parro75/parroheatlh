@@ -17,8 +17,9 @@ services:
       UNIX_SOCKET: /run/shc/shc.sock
       # Volume chiffré (deploy/volume-chiffre/) : sans ce fichier dans /data, refus de démarrer
       # (sinon, volume verrouillé = base vide créée EN CLAIR dans le dossier de montage).
-      # Écritures signées par le téléphone appairé : optional pendant la mise en route, puis required.
-      DEVICE_SIGNATURE: optional
+      # Écritures signées par le téléphone appairé (shc/devices.py) : le jeton seul ne suffit plus.
+      # Nouveau téléphone : se connecter dans l'app (mot de passe + TOTP) l'appaire ; ancien : admin revoke-device.
+      DEVICE_SIGNATURE: required
       DATA_MARKER: .volume-chiffre   # retirer cette ligne si la base n'est pas sur un volume chiffré
 
     # Base SQLite HORS de /opt, dans un volume LUKS2 (deploy/volume-chiffre/) monté sur /var/lib/sante ;
