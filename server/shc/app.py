@@ -25,7 +25,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, audit, config, devices, ha, pdf, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, audit, config, devices, ha, passkeys, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -114,6 +114,16 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     )
     mcp.custom_route("/login", methods=["GET"], include_in_schema=False)(provider.login_get)
     mcp.custom_route("/login", methods=["POST"], include_in_schema=False)(provider.login_post)
+    # Clés d'accès WebAuthn (passkeys, clés FIDO2) : options de connexion, gestion des clés, scripts.
+    mcp.custom_route("/login/cle-options", methods=["POST"], include_in_schema=False)(provider.passkey_options)
+    mcp.custom_route("/login.js", methods=["GET"], include_in_schema=False)(provider.static_js)
+    mcp.custom_route("/passkeys.js", methods=["GET"], include_in_schema=False)(provider.static_js)
+    mcp.custom_route("/passkeys", methods=["GET"], include_in_schema=False)(provider.keys_get)
+    mcp.custom_route("/passkeys", methods=["POST"], include_in_schema=False)(provider.keys_post)
+    mcp.custom_route("/passkeys/options", methods=["POST"], include_in_schema=False)(provider.keys_options)
+    mcp.custom_route("/passkeys/enregistrer", methods=["POST"], include_in_schema=False)(provider.keys_register)
+    mcp.custom_route("/passkeys/supprimer", methods=["POST"], include_in_schema=False)(provider.keys_delete)
+    mcp.custom_route("/passkeys/fin", methods=["POST"], include_in_schema=False)(provider.keys_end)
 
     def mcp_audit(tool: str, detail: str = "") -> None:
         tok = get_access_token()
@@ -265,6 +275,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     audit_log = audit.AuditLog(settings.db_path, settings.audit_retention_days)
     audit_log.purge()
     provider.audit = audit_log
+    provider.passkeys = passkeys.Passkeys(settings.db_path, settings.public_url)
+    provider.second_factor = settings.second_factor
     exports = uploads.Uploads(settings.db_path, os.path.join(os.path.dirname(settings.db_path), "uploads"), run_import)
     mcp = build_mcp(store, settings, provider, reports, audit_log)
     security = TransportSecuritySettings(
@@ -508,6 +520,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         "jeton-rejoue": "Jeton rejoué, session révoquée ({actor})",
         "client-enregistre": "Nouveau client OAuth : {detail}",
         "ecriture-refusee": "Écriture refusée : {detail} (IP {ip})",
+        "cle-ajoutee": "Clé d'accès ajoutée : {detail} (IP {ip})",
+        "cle-supprimee": "Clé d'accès retirée : {detail} (IP {ip})",
     }
 
     @app.get("/api/v1/report-job/security-events")

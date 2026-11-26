@@ -23,7 +23,7 @@ from typing import Any
 GENESIS = "0" * 64
 # Événements qui méritent une alerte (relayée par le job de surveillance, sans donnée de santé).
 ALERT_ACTIONS = {"appairage", "connexion", "connexion-verrouillee", "jeton-rejoue", "client-enregistre",
-                 "ecriture-refusee"}
+                 "ecriture-refusee", "cle-ajoutee", "cle-supprimee"}
 
 
 def _digest(prev: str, row: tuple) -> str:

@@ -42,7 +42,8 @@ sante.example.org {
 	}
 
 	# Navigateur du propriétaire, de n'importe où : protégé par mot de passe + TOTP.
-	@navigateur path /authorize /login
+	# + clés d'accès WebAuthn : options de connexion, gestion des clés (/passkeys), scripts de la page.
+	@navigateur path /authorize /login /login/* /login.js /passkeys /passkeys/* /passkeys.js
 	handle @navigateur {
 		reverse_proxy unix//run/sante/shc.sock
 	}

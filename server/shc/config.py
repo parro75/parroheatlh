@@ -30,6 +30,7 @@ class Settings:
     # Écritures signées par le téléphone (shc.devices) : off | optional (vérifiée si présente) | required
     device_signature: str = "optional"
     audit_retention_days: int = 365  # journal des accès (traçabilité)
+    second_factor: str = "any"  # connexion : clé d'accès OU TOTP (any) | clé seulement dès qu'une existe (passkey)
 
     @property
     def mcp_path(self) -> str:
@@ -84,7 +85,15 @@ def load() -> Settings:
         report_deadline_hour=int(os.environ.get("REPORT_DEADLINE_HOUR", "12")),
         device_signature=_device_signature(),
         audit_retention_days=int(os.environ.get("AUDIT_RETENTION_DAYS", "365")),
+        second_factor=_second_factor(),
     )
+
+
+def _second_factor() -> str:
+    mode = os.environ.get("AUTH_SECOND_FACTOR", "any").strip().lower()
+    if mode not in ("any", "passkey"):
+        raise SystemExit("AUTH_SECOND_FACTOR : any ou passkey")
+    return mode
 
 
 def _device_signature() -> str:

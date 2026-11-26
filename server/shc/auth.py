@@ -288,41 +288,99 @@ class HealthOAuthProvider:
         return self._x("DELETE FROM oauth_tokens")
 
     # ---- page de connexion ----------------------------------------------
+    # Second facteur : clé d'accès WebAuthn (passkey, clé FIDO2) ou TOTP en secours, selon
+    # self.second_factor : "any" (clé OU TOTP) | "passkey" (TOTP refusé dès qu'une clé existe).
+    passkeys = None  # shc.passkeys.Passkeys, posé par create_app
+    second_factor = "any"
+
     def _csp(self) -> str:
         origins = sorted({f"{urlparse(u).scheme}://{urlparse(u).netloc}" for u in self.redirect_allowlist}
                          | {f"{urlparse(u).scheme}:" for u in self.static_redirects})
         # form-action couvre aussi la redirection qui suit le POST (vers claude.ai).
-        return ("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
+        return ("default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'; "
                 f"form-action 'self' {' '.join(origins)}")
 
-    def _page(self, body: str, status: int = 200) -> HTMLResponse:
+    def _page(self, body: str, status: int = 200, headers: dict | None = None) -> HTMLResponse:
         doc = f"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <title>Parro Health — connexion</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:26rem;margin:3rem auto;padding:0 1rem;line-height:1.5}}
 input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;margin:.3rem 0 .9rem}}
-.err{{color:#b00020}} small{{color:#555}}</style></head><body>{body}</body></html>"""
+.err{{color:#b00020}} small{{color:#555}} .ou{{text-align:center;color:#555;margin:.2rem 0}}
+table{{width:100%;border-collapse:collapse}} td{{padding:.3rem 0;border-bottom:1px solid #ddd}}
+td button{{width:auto;margin:0;padding:.3rem .6rem;font-size:.9rem}}</style></head><body>{body}</body></html>"""
         return HTMLResponse(doc, status_code=status, headers={
             "Content-Security-Policy": self._csp(),
             "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer",
             "X-Frame-Options": "DENY",
+            **(headers or {}),
         })
+
+    def _has_keys(self) -> bool:
+        return self.passkeys is not None and self.passkeys.count() > 0
+
+    def _second_factor_html(self, scope_field: str, scope_value: str) -> str:
+        """Bouton clé d'accès (si au moins une clé) + champ TOTP (sauf si refusé par la politique)."""
+        key_btn = (f'<input type="hidden" name="webauthn" value="">'
+                   f'<button type="button" id="pk" data-{scope_field}="{html.escape(scope_value)}">'
+                   f'Continuer avec ma clé d\'accès</button>') if self._has_keys() else ""
+        totp_allowed = not (self.second_factor == "passkey" and self._has_keys())
+        totp = ('<p class="ou">ou, en secours</p>' if key_btn else "") + (
+            '<label>Code TOTP<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" '
+            'autocomplete="one-time-code"' + ("" if key_btn else " required") + '></label>'
+            '<button type="submit">Autoriser avec le code</button>') if totp_allowed else ""
+        return key_btn + totp + ('<p class="err" id="pkerr"></p><script src="/login.js"></script>' if key_btn else "")
 
     def _form(self, req_id: str, client_name: str, redirect_host: str, error: str = "") -> HTMLResponse:
         err = f'<p class="err">{html.escape(error)}</p>' if error else ""
         return self._page(f"""<h1>Parro Health</h1>
 <p><b>{html.escape(client_name)}</b> demande l'accès en <b>lecture</b> à tes données de santé.<br>
 <small>Retour vers : {html.escape(redirect_host)}</small></p>{err}
-<form method="post" action="/login" autocomplete="off">
+<form method="post" action="/login" autocomplete="off" id="f">
 <input type="hidden" name="req" value="{html.escape(req_id)}">
 <label>Mot de passe<input type="password" name="password" autocomplete="current-password" required autofocus></label>
-<label>Code TOTP<input name="code" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" autocomplete="one-time-code" required></label>
-<button type="submit">Autoriser</button></form>""")
+{self._second_factor_html("req", req_id)}</form>""")
+
+    def _check(self, form: dict[str, str], challenge_key: str) -> tuple[bool, str]:
+        """Mot de passe + second facteur. (succès, méthode). Tout échec compte pour le verrouillage."""
+        from .passkeys import PasskeyError
+        password = form.get("password", "")
+        if form.get("webauthn"):
+            if not self._has_keys():
+                self._fail()
+                return False, "clé"
+            # Mot de passe d'abord : un mauvais mot de passe ne consomme ni le défi ni le compteur de la clé.
+            if not verify_password(password, self.owner.password_hash):
+                self._fail()
+                return False, "clé"
+            try:
+                name = self.passkeys.verify(challenge_key, json.loads(form["webauthn"]))
+            except (ValueError, PasskeyError):
+                self._fail()
+                return False, "clé"
+            self._set_state("failures", 0)
+            return True, f"clé « {name} »"
+        if self.second_factor == "passkey" and self._has_keys():
+            self._fail()
+            return False, "TOTP refusé (clé exigée)"
+        return self.check_owner(password, form.get("code", "")), "TOTP"
 
     async def _client_label(self, client_id: str) -> str:
         client = await self.get_client(client_id)
         return (client.client_name if client and client.client_name else client_id)
+
+    @staticmethod
+    def _ip(request: Request) -> str:
+        return (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+
+    @staticmethod
+    async def _form_body(request: Request, limit: int = 16384) -> dict[str, str] | None:
+        body = await request.body()
+        if len(body) > limit:
+            return None
+        return {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
 
     async def login_get(self, request: Request) -> Response:
         req_id = request.query_params.get("req", "")
@@ -333,10 +391,9 @@ input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;ma
         return self._form(req_id, await self._client_label(client_id), urlparse(str(params.redirect_uri)).netloc)
 
     async def login_post(self, request: Request) -> Response:
-        body = await request.body()
-        if len(body) > 4096:
+        form = await self._form_body(request)
+        if form is None:
             return self._page("<p>Requête trop grande.</p>", 413)
-        form = {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
         req_id = form.get("req", "")
         pending = self._pending(req_id)
         if pending is None:
@@ -345,14 +402,143 @@ input,button{{font-size:1.1rem;width:100%;box-sizing:border-box;padding:.6rem;ma
         label, host = await self._client_label(client_id), urlparse(str(params.redirect_uri)).netloc
         if (wait := self.locked_for()) > 0:
             return self._page(f"<p class='err'>Trop d'essais. Réessaie dans {wait // 60 + 1} min.</p>", 429)
-        ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
-        if not self.check_owner(form.get("password", ""), form.get("code", "")):
-            log.warning("échec de connexion (client %s)", client_id)
-            self._a("inconnu", "connexion-echec", f"pour {label}", ip=ip, status=401)
-            return self._form(req_id, label, host, "Mot de passe ou code incorrect.")
+        ip = self._ip(request)
+        ok, method = self._check(form, "req:" + req_id)
+        if not ok:
+            log.warning("échec de connexion (client %s, %s)", client_id, method)
+            self._a("inconnu", "connexion-echec", f"pour {label} ({method})", ip=ip, status=401)
+            return self._form(req_id, label, host, "Mot de passe, clé ou code incorrect.")
         target = self.issue_code(req_id)
         if target is None:
             return self._page("<p>Demande déjà utilisée.</p>", 400)
-        log.info("connexion réussie, code émis pour le client %s", client_id)
-        self._a("proprietaire", "connexion", f"pour {label}", ip=ip)
+        log.info("connexion réussie (%s), code émis pour le client %s", method, client_id)
+        self._a("proprietaire", "connexion", f"pour {label} ({method})", ip=ip)
         return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
+
+    async def passkey_options(self, request: Request) -> Response:
+        """Options WebAuthn d'authentification pour une demande de connexion (req) ou la page de gestion (gate)."""
+        from starlette.responses import JSONResponse
+        from .passkeys import PasskeyError
+        form = await self._form_body(request, 2048) or {}
+        if form.get("req"):
+            if self._pending(form["req"]) is None:
+                return JSONResponse({"error": "demande expirée"}, status_code=400)
+            key = "req:" + form["req"]
+        elif form.get("gate") and len(form["gate"]) >= 20:
+            key = "gate:" + form["gate"]
+        else:
+            return JSONResponse({"error": "requête invalide"}, status_code=400)
+        try:
+            return Response(self.passkeys.authentication_options(key), media_type="application/json",
+                            headers={"Cache-Control": "no-store"})
+        except PasskeyError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # ---- gestion des clés d'accès (/passkeys) ---------------------------------------------------------
+    COOKIE = "shc_cles"
+
+    def _same_origin(self, request: Request) -> bool:
+        return request.headers.get("origin", "") == self.public_url
+
+    def _keys_gate(self, error: str = "") -> HTMLResponse:
+        gate = secrets.token_urlsafe(24)
+        err = f'<p class="err">{html.escape(error)}</p>' if error else ""
+        return self._page(f"""<h1>Clés d'accès</h1>
+<p>Gestion des clés de connexion (clé physique, passkey). Identifie-toi d'abord.</p>{err}
+<form method="post" action="/passkeys" autocomplete="off" id="f">
+<input type="hidden" name="gate" value="{gate}">
+<label>Mot de passe<input type="password" name="password" autocomplete="current-password" required autofocus></label>
+{self._second_factor_html("gate", gate)}</form>""")
+
+    def _keys_page(self, msg: str = "") -> HTMLResponse:
+        rows = "".join(
+            f"<tr><td><b>{html.escape(k['name'] or 'clé')}</b><br><small>ajoutée le "
+            f"{time.strftime('%d/%m/%Y', time.localtime(k['created']))} · dernière connexion "
+            f"{time.strftime('%d/%m/%Y', time.localtime(k['last_used'])) if k['last_used'] else 'jamais'}</small></td>"
+            f"<td><form method='post' action='/passkeys/supprimer'><input type='hidden' name='id' value='{html.escape(k['id'])}'>"
+            f"<button type='submit'>Retirer</button></form></td></tr>" for k in self.passkeys.list())
+        note = ("TOTP refusé dès qu'une clé existe." if self.second_factor == "passkey"
+                else "Le code TOTP reste accepté en secours.")
+        return self._page(f"""<h1>Clés d'accès</h1>{f"<p>{html.escape(msg)}</p>" if msg else ""}
+<table>{rows or "<tr><td>Aucune clé enregistrée.</td></tr>"}</table>
+<p><small>Enregistre au moins deux clés (une de secours). {note}</small></p>
+<label>Nom de la nouvelle clé<input id="nom" maxlength="60" placeholder="YubiKey, 1Password, Samsung Pass…"></label>
+<button type="button" id="ajouter">Ajouter une clé d'accès</button><p class="err" id="pkerr"></p>
+<form method="post" action="/passkeys/fin"><button type="submit">Terminer</button></form>
+<script src="/passkeys.js"></script>""")
+
+    async def keys_get(self, request: Request) -> Response:
+        if self.passkeys.session_ok(request.cookies.get(self.COOKIE)):
+            return self._keys_page()
+        return self._keys_gate()
+
+    async def keys_post(self, request: Request) -> Response:
+        form = await self._form_body(request)
+        if form is None or not self._same_origin(request):
+            return self._page("<p>Requête refusée.</p>", 400)
+        if (wait := self.locked_for()) > 0:
+            return self._page(f"<p class='err'>Trop d'essais. Réessaie dans {wait // 60 + 1} min.</p>", 429)
+        ok, method = self._check(form, "gate:" + form.get("gate", ""))
+        if not ok:
+            self._a("inconnu", "connexion-echec", f"gestion des clés ({method})", ip=self._ip(request), status=401)
+            return self._keys_gate("Mot de passe, clé ou code incorrect.")
+        tok = self.passkeys.new_session()
+        self._a("proprietaire", "connexion", f"gestion des clés ({method})", ip=self._ip(request))
+        resp = RedirectResponse("/passkeys", status_code=303)
+        resp.set_cookie(self.COOKIE, tok, max_age=600, httponly=True, secure=True, samesite="strict", path="/passkeys")
+        return resp
+
+    def _session_or_none(self, request: Request) -> str | None:
+        tok = request.cookies.get(self.COOKIE)
+        return tok if self.passkeys.session_ok(tok) and self._same_origin(request) else None
+
+    async def keys_options(self, request: Request) -> Response:
+        from starlette.responses import JSONResponse
+        from .passkeys import PasskeyError
+        tok = self._session_or_none(request)
+        if tok is None:
+            return JSONResponse({"error": "session expirée"}, status_code=401)
+        try:
+            return Response(self.passkeys.registration_options(tok), media_type="application/json",
+                            headers={"Cache-Control": "no-store"})
+        except PasskeyError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def keys_register(self, request: Request) -> Response:
+        from starlette.responses import JSONResponse
+        from .passkeys import PasskeyError
+        tok = self._session_or_none(request)
+        if tok is None:
+            return JSONResponse({"error": "session expirée"}, status_code=401)
+        try:
+            body = json.loads(await request.body())
+            name = str(body.get("name", ""))[:60] or "clé"
+            self.passkeys.register(tok, body["credential"], name)
+        except (ValueError, KeyError, TypeError, PasskeyError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        self._a("proprietaire", "cle-ajoutee", f"« {name} »", ip=self._ip(request))
+        return JSONResponse({"ok": True})
+
+    async def keys_delete(self, request: Request) -> Response:
+        tok = self._session_or_none(request)
+        form = await self._form_body(request, 2048)
+        if tok is None or form is None:
+            return RedirectResponse("/passkeys", status_code=303)
+        names = {k["id"]: k["name"] for k in self.passkeys.list()}
+        if self.passkeys.delete(form.get("id", "")):
+            self._a("proprietaire", "cle-supprimee", f"« {names.get(form.get('id', ''), '?')} »", ip=self._ip(request))
+        return self._keys_page("Clé retirée.")
+
+    async def keys_end(self, request: Request) -> Response:
+        self.passkeys.end_session(request.cookies.get(self.COOKIE))
+        resp = self._page("<h1>Clés d'accès</h1><p>Session terminée. Tu peux fermer cette page.</p>")
+        resp.delete_cookie(self.COOKIE, path="/passkeys")
+        return resp
+
+    async def static_js(self, request: Request) -> Response:
+        from pathlib import Path
+        name = request.url.path.lstrip("/")
+        if name not in ("login.js", "passkeys.js"):
+            return Response(status_code=404)
+        return Response((Path(__file__).parent / "static" / name).read_text(), media_type="text/javascript",
+                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
