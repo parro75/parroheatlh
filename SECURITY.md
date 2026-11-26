@@ -39,7 +39,9 @@ GitHub) sur ce dépôt. Réponse sous quelques jours.
 ## Derniers contrôles
 
 **26/11/2026 — test d'intrusion** (depuis Internet, sans test de charge ni tentative de connexion sur
-`/login`) : TLS 1.2/1.3 seuls (1.0/1.1 et chiffrements CBC/SHA1 refusés), HSTS ; 34 sondes HTTP (fichiers
+`/login`) : TLS 1.2/1.3 seuls (1.0/1.1 et chiffrements CBC/SHA1 refusés), confidentialité persistante
+(ECDHE + AES-GCM / ChaCha20), HSTS ; testssl.sh 3.2.1 : aucune vulnérabilité TLS connue (Heartbleed, ROBOT,
+POODLE, BEAST, SWEET32, LOGJAM, DROWN…) ; 34 sondes HTTP (fichiers
 sensibles, documentation d'API, traversées de chemin encodées, casse, méthodes, CORS, en-tête Host forgé,
 redirections OAuth malveillantes, corps de 22 Mo, routes internes) → toutes refusées comme prévu ; clé SSH
 de déverrouillage limitée à `etat|ouvrir` (ni shell, ni redirection, ni injection) ; APK publié : non
