@@ -74,8 +74,12 @@ sante.example.org {
 # ⚠️ Adapter les plages à tes réseaux.
 sante.lan.example.org {
 	import tls_dns
+	# ⚠️ Un filtre « respond @offnet 403 » serait IGNORÉ ici : Caddy exécute les blocs handle AVANT la
+	# directive respond. Le filtre doit donc être lui-même un handle, placé en premier.
 	@offnet not remote_ip 10.0.0.0/8 192.168.0.0/16
-	respond @offnet 403
+	handle @offnet {
+		respond 403
+	}
 	@interne path /api/v1/report-job/* /api/v1/ha/*
 	handle @interne {
 		reverse_proxy unix//run/sante/shc.sock
