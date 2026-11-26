@@ -1,145 +1,216 @@
-# Connecteur Samsung Health → Claude
+# Parro Health
 
-Expose à Claude, par un serveur MCP auto-hébergé, les données Samsung Health (Galaxy Watch) qui ne
-remontent pas dans Strava : sommeil, pas, FC, FC au repos, HRV, poids, masse grasse, SpO2, séances.
+Tableau de bord de santé **personnel et auto-hébergé**. Une app Android lit Health Connect (montre Samsung
+Galaxy Watch via Samsung Health, balance connectée via Google Health), envoie les mesures à un serveur
+qu'on héberge soi-même, et les rend lisibles partout :
+
+- dans l'**app** : tableau de bord, graphiques interactifs, hypnogramme, tendances sur dix ans, journal ;
+- dans **Claude**, par un connecteur MCP en lecture seule (« comment évolue ma FC au repos depuis un an ? ») ;
+- dans un **rapport du matin** et un **rapport de la semaine**, calculés par règles et rédigés par un modèle
+  de langage **local** (Ollama) ;
+- dans une **fiche PDF** pour un rendez-vous médical ;
+- dans un tableau de bord **Home Assistant** (chiffres seulement).
+
+Aucun service tiers ne voit les données au-delà de ce que Samsung Health et Google Health voient déjà.
 
 ```
-Galaxy Watch ─► Samsung Health ─► Health Connect (téléphone)
-                                        │  lecture seule, toutes les heures (WorkManager)
-                                        ▼
-                         Santé Sync (app Android, android/)
-                                        │  POST /ingest  (HTTPS + Bearer INGEST_TOKEN)
-                                        ▼
-                  serveur shc (server/) : FastAPI + SQLite + MCP
-                                        │  /mcp  (streamable HTTP, sans état, jeton OAuth)
-                                        ▼
-                         Claude (connecteur personnalisé)
+Galaxy Watch ─► Samsung Health ─┐                                ┌─ export Samsung Health (zip, HRV, scores,
+Balance ─────► Google Health ───┴─► Health Connect (téléphone)   │  historique depuis 2015) partagé vers l'app
+                                          │                       │
+                                          ▼                       ▼
+                          ┌──────── Parro Health (android/) ──────────┐
+                          │ synchro horaire, et toutes les 15 min de 5 h à 11 h ; journal, objectifs
+                          ▼ POST /ingest (jeton d'ingestion)          ▲ GET /api/v1/… (OAuth, PKCE)
+          ┌─────────────────── serveur shc (server/) : FastAPI + SQLite + MCP ───────────────────┐
+          │ /mcp (OAuth)                 │ /api/v1/report-job/… (jeton dédié)  │ /api/v1/ha/summary (jeton dédié)
+          ▼                              ▼                                     ▼
+       Claude                 job de rapport (jobs/) + Ollama local     Home Assistant
+                              (rédige ; alertes de synchro par HA)
+```
+
+## Ce que fait le système
+
+| Où | Quoi |
+|---|---|
+| **App — Aujourd'hui** | anneaux pas/sommeil vs objectifs, rapport du matin dépliable, 6 tuiles (nuit, FC au repos, HRV, pas, poids, stress) avec mini-courbe, semaine en cours ; tirer vers le bas = synchro |
+| **App — détails** | Sommeil (hypnogramme de la nuit, durées, régularité coucher/lever, score), Cœur (FC au repos, HRV, stress, FC du jour, SpO2), Activité (pas, séances), Corps (poids, masse grasse) ; périodes 7 j → tout l'historique |
+| **App — Tendances** | 10 mesures, 12 mois (par mois), 5 ans et tout (par année), même mois d'une année à l'autre |
+| **App — Journal** | alcool, café tardif, maladie… noté hors ligne, envoyé à la synchro suivante, rappelé tel quel dans les rapports |
+| **App — Profil** | objectifs, fiche PDF, rappel de pesée, verrouillage biométrique, synchro, export Samsung, diagnostic Health Connect, connexion |
+| **Rapports** | faits et signaux calculés par règles sur le serveur ; le modèle local ne fait que rédiger ; annoncés par une notification **locale** de l'app, sans contenu de santé si l'app est verrouillée |
+| **Claude** | 15 outils MCP en lecture seule (voir plus bas) |
+| **Fiche médecin** | PDF de 3, 6 ou 12 mois généré en mémoire : tableau des mesures, courbes, nombre de jours par étiquette du journal (jamais les notes) |
+| **Home Assistant** | `GET /api/v1/ha/summary` : chiffres du jour seulement, pour un tableau de bord réservé au propriétaire |
+
+## Arborescence
+
+```
+android/   app Parro Health (Kotlin, Jetpack Compose)
+server/    serveur shc : API d'ingestion, MCP, OAuth, API de lecture, rapports, PDF
+jobs/      job de rédaction des rapports et de surveillance (systemd, Python sans dépendance)
+deploy/    bloc Caddy (socket Unix, routes ouvertes une à une)
+dist/      APK signés (non versionnés)
 ```
 
 ## Serveur (`server/`)
 
-Python 3.13, SDK MCP officiel **v2** (`mcp==2.3.0`, `MCPServer`), FastAPI, SQLite (WAL).
+Python 3.13, SDK MCP officiel v2 (`mcp==2.3.0`), FastAPI, SQLite (WAL), fpdf2 pour la fiche PDF.
+
+### Routes
 
 | Route | Rôle | Protection |
 |---|---|---|
-| `POST /ingest` | reçoit les lots du téléphone | `Authorization: Bearer <INGEST_TOKEN>` |
-| `/mcp` | MCP streamable HTTP (réponses JSON, sans état) | jeton OAuth (portée `health:read`) + `Host`/`Origin` vérifiés |
-| `/.well-known/…`, `/register`, `/token`, `/revoke` | serveur d'autorisation OAuth 2.1 (SDK MCP) | PKCE S256 obligatoire |
+| `POST /ingest` | lots du téléphone (mesures, journal, objectifs, suppressions) | `Bearer INGEST_TOKEN` |
+| `POST/PUT/GET /ingest-export/…` | export Samsung Health envoyé par morceaux de 15 Mio, puis import automatique | `Bearer INGEST_TOKEN` |
+| `/mcp` | MCP streamable HTTP, sans état, réponses JSON | jeton OAuth (`health:read`) + `Host`/`Origin` vérifiés |
+| `/.well-known/…`, `/register`, `/token`, `/revoke` | serveur d'autorisation OAuth 2.1 | PKCE S256 obligatoire |
 | `/authorize`, `/login` | connexion du propriétaire | mot de passe (scrypt) + TOTP |
-| `GET /api/v1/<nom>` | lecture pour l'app Android (today, sleep, steps, heart_rate, hrv, recovery, stress, training_load, workouts, body, spo2, trends, status) | jeton OAuth du client public `parro-health-android` (PKCE) |
+| `GET /api/v1/<nom>` | lecture pour l'app : `today`, `report`, `weekly`, `night`, `sleep`, `steps`, `heart_rate`, `hrv`, `recovery`, `stress`, `training_load`, `workouts`, `body`, `spo2`, `journal`, `trends`, `status` | jeton OAuth du client public `parro-health-android` |
+| `GET /api/v1/pdf/summary?months=3\|6\|12` | fiche PDF, générée en mémoire | jeton OAuth de l'app |
+| `/api/v1/report-job/…` | faits du jour/de la semaine, dépôt du texte rédigé, état de la synchro, rappel d'export | `Bearer REPORT_TOKEN` |
+| `GET /api/v1/ha/summary` | chiffres du jour pour Home Assistant | `Bearer HA_TOKEN` |
 | `GET /healthz` | sonde | aucune donnée |
 | tout le reste | 404 | — |
 
-### Sécurité
-
-- **Un seul utilisateur** : le propriétaire des données. `/login` exige le mot de passe **et** un code
-  TOTP ; un code déjà utilisé est refusé (anti-rejeu) ; 5 échecs = connexion verrouillée 15 min.
-- **Clients** : enregistrement dynamique (DCR) accepté **seulement** avec une URL de retour de la liste
-  blanche (`claude.ai` / `claude.com`) ; au plus 50 clients.
-- **Jetons** : accès 1 h, rafraîchissement 30 j à rotation ; rejouer un jeton de rafraîchissement déjà
-  utilisé révoque toute la famille. Codes et jetons ne sont stockés que **hachés** (SHA-256).
-  `python -m shc.admin revoke-all` coupe tout.
-- **Jeton d'ingestion** distinct : il n'ouvre pas le MCP, et un jeton OAuth n'ouvre pas `/ingest`.
-- **Page de connexion** : CSP stricte (`frame-ancestors 'none'`, `form-action` limité), `no-store`.
-- **Déploiement** (voir `deploy/`) : conteneur en lecture seule, sans capability, non root, sur un réseau
-  Docker `internal` (aucun accès sortant) ; le reverse proxy n'ouvre les routes serveur à serveur
-  qu'aux IP sortantes publiées par Anthropic et répond 404 à tout le reste.
-- Aucun journal d'accès applicatif.
+Plages : 366 jours au plus par appel, sauf `trends` et `body` (20 ans). Une nuit est rattachée au **jour du
+réveil**. Les pesées en double (même source, même valeur à 10 min près) sont ignorées à la lecture.
 
 ### Outils MCP (lecture seule)
 
 `get_daily_steps`, `get_sleep`, `get_heart_rate`, `get_hrv`, `get_body_measurements`, `get_spo2`,
-`get_workouts` — paramètres optionnels `start` / `end` (`AAAA-MM-JJ`, inclus ; 7 derniers jours par
-défaut ; 366 jours au plus) — et `get_sync_status` (dernière synchro, couverture par type).
-Une nuit est rattachée au **jour du réveil**.
+`get_workouts`, `get_recovery`, `get_stress`, `get_training_load`, `get_journal` — `start`/`end` optionnels
+(`AAAA-MM-JJ`, 7 derniers jours par défaut) — ainsi que `get_trends` (moyennes par semaine, mois ou année
+sur 20 ans), `get_daily_report`, `get_weekly_report` et `get_sync_status` (couverture par type).
 
-### Contrat d'ingestion
+### Données
 
-```json
-{"records": [
-  {"type": "sleep_session", "id": "<metadata.id Health Connect>",
-   "start": "2026-11-23T23:10:00-05:00", "end": "2026-11-24T06:40:00-05:00",
-   "zone_offset": "-05:00", "data": {"stages": [{"start": "…", "end": "…", "stage": "deep"}]}}
-]}
-```
+| Source | Types |
+|---|---|
+| Téléphone (Health Connect) | `steps_daily`, `heart_rate_daily` (agrégats par jour local), `resting_heart_rate` (calculée par l'app), `hrv_rmssd`, `sleep_session` (avec phases), `weight`, `body_fat`, `oxygen_saturation`, `exercise_session` |
+| Téléphone (app) | `journal`, `goals`, et `deletion` (suppressions relevées par l'API Changes de Health Connect) |
+| Export Samsung Health | `sleep_score`, `vitals_daily` (HRV, FC de sommeil, respiration, température cutanée), `energy_score`, `stress_daily`, `training_load_daily`, et l'historique des types ci-dessus |
 
-Types : `steps_daily`, `heart_rate_daily` (agrégats par jour local, id `steps:AAAA-MM-JJ` / `hr:…`),
-`resting_heart_rate`, `hrv_rmssd`, `sleep_session`, `weight`, `body_fat`, `oxygen_saturation`,
-`exercise_session` (`exercise_type` = code Health Connect, traduit côté serveur).
-Upsert idempotent sur `(type, id)` ; un lot invalide est refusé **en bloc** (422, index fautif dans le
-message). Horodatage sans décalage = refusé.
+Contrat d'ingestion : `{"records": [{"type", "id", "start", "end"?, "zone_offset", "data"}]}`, upsert
+idempotent sur `(type, id)`, lot invalide refusé **en bloc** (422, index fautif dans le message), horodatage
+sans décalage refusé.
+
+### Rapports
+
+`report.facts` (matin) et `report.weekly_facts` (semaine) calculent tout : nuit et moyennes 28 j, FC au
+repos, HRV, pas, SpO2, poids (tendance lissée sur les moyennes de pesées), journal. Les **signaux** (nuit
+courte, FC au repos élevée, HRV basse, poids qui varie de plus de 2 kg en une semaine…) sont des règles
+testées, ajoutées **après** le texte : jamais confiés au modèle. Le job (`jobs/rapport_ia.py`, timers toutes
+les 10 min de 4 h à 12 h) envoie des faits déjà mis en forme au modèle local, contrôle sa réponse, et retombe
+sur un texte de secours si besoin. Le service `parro-surveillance` alerte (webhook Home Assistant, sans
+donnée de santé) si le téléphone ne synchronise plus, et rappelle d'envoyer un export Samsung chaque mois.
+
+### Sécurité
+
+- **Un seul utilisateur.** `/login` exige mot de passe **et** code TOTP ; code déjà utilisé refusé ; 5 échecs
+  = 15 min de verrouillage. Enregistrement dynamique de clients limité aux URL de retour de `claude.ai` /
+  `claude.com` (50 clients au plus).
+- **Jetons.** Accès 1 h, rafraîchissement 30 j à rotation, rejeu = révocation de la famille ; stockés
+  **hachés**. Quatre secrets distincts, refusés s'ils sont trop courts ou identiques : `INGEST_TOKEN`
+  (écriture), OAuth (lecture), `REPORT_TOKEN` (job), `HA_TOKEN` (Home Assistant).
+  `python -m shc.admin revoke-all` coupe tout.
+- **Conteneur sans réseau** (`network_mode: none`), en lecture seule, non root, sans capability : il écoute
+  sur un **socket Unix** que seul le reverse proxy monte. Le proxy n'ouvre que les routes listées, celles
+  du MCP seulement aux IP sortantes publiées par Anthropic. Aucun journal d'accès applicatif.
+- **Fiche PDF** générée en mémoire, jamais écrite sur le disque du serveur.
+- **Notifications** : aucune donnée de santé ne passe par Home Assistant ni par Google ; le rapport est
+  annoncé par l'app elle-même.
+
+### Configuration (`.env`)
+
+| Variable | Rôle |
+|---|---|
+| `INGEST_TOKEN`, `OWNER_PASSWORD_HASH`, `TOTP_SECRET` | générés par `python -m shc.admin init` (le hachage reste **entre apostrophes** : sinon `docker compose` interprète les `$` et le tronque en silence) |
+| `PUBLIC_URL` | URL publique (émetteur OAuth, ressource MCP) |
+| `TZ_LOCAL`, `DB_PATH` | fuseau des jours locaux, base SQLite |
+| `REPORT_TOKEN`, `REPORT_DEADLINE_HOUR` | job de rapport (facultatif) |
+| `HA_TOKEN` | résumé pour Home Assistant (facultatif) |
+| `UNIX_SOCKET` | socket d'écoute (sinon TCP 8080) — fixé par `docker-compose.yml` |
+| `MCP_ALLOWED_HOSTS`, `OAUTH_REDIRECT_URIS`, `APP_CLIENT_ID`, `APP_REDIRECT_URI` | valeurs par défaut adaptées |
 
 ### Déploiement
 
 ```sh
 cd server
-grep -v '=a-remplacer' .env.example > .env && chmod 600 .env   # puis régler PUBLIC_URL
+grep -v '=a-remplacer' .env.example > .env && chmod 600 .env    # puis régler PUBLIC_URL
 docker compose build
-docker compose run --rm -T shc python -m shc.admin init >> .env   # mot de passe lu sur stdin
-install -d -o 10001 -g 10001 -m 700 /var/lib/sante
+docker compose run --rm -T shc python -m shc.admin init >> .env    # mot de passe lu sur stdin
+install -d -o 10001 -g 10001 -m 700 /var/lib/sante                 # base
+install -d -o 10001 -m 750 /var/lib/sante-run                      # socket
 docker compose up -d
+docker compose run --rm shc python -m shc.admin totp-uri           # à enregistrer dans l'appli TOTP
 ```
 
-Le conteneur n'a **aucun réseau** (`network_mode: none`) : il écoute sur un socket Unix dans
-`/var/lib/sante-run` (`install -d -o 10001 -m 750`). Monter ce dossier sur `/run/sante` dans le conteneur
-du reverse proxy, puis ajouter le bloc `deploy/Caddyfile.sante`. Aucune règle de pare-feu nécessaire. ⚠️ `OWNER_PASSWORD_HASH` doit rester **entre apostrophes** dans `.env` : sans elles,
-`docker compose` interprète les `$` du hachage scrypt et le tronque en silence. L'URI TOTP à enregistrer dans l'appli
-d'authentification : `docker compose run --rm shc python -m shc.admin totp-uri`.
+Monter `/var/lib/sante-run` sur `/run/sante` dans le conteneur du reverse proxy et ajouter le bloc
+`deploy/Caddyfile.sante`. Dans Claude : Réglages → Connecteurs → *Ajouter un connecteur personnalisé* →
+`https://sante.example.org/mcp`, puis mot de passe + code TOTP et *Autoriser*.
 
-### Brancher dans Claude
-
-Réglages → Connecteurs → *Ajouter un connecteur personnalisé* → URL `https://sante.example.org/mcp`.
-Claude ouvre la page de connexion : mot de passe + code TOTP, puis *Autoriser*.
+Job de rapport : copier `jobs/rapport_ia.py` dans `/opt/parro-rapport/`, les unités `jobs/*.service|timer`
+dans systemd, et créer `/etc/parro-sante/rapport.env` (`SANTE_URL`, `REPORT_TOKEN`, `OLLAMA_URL`, `MODEL`,
+`HA_WEBHOOK_URL`). `rapport_ia.py --apercu [modèle]` rédige le rapport du jour sans l'enregistrer.
 
 ### Tests
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q     # ingestion, OAuth (chaque garde-fou), MCP de bout en bout avec jeton
+python -m pytest -q    # ingestion, OAuth (chaque garde-fou), MCP de bout en bout, rapports, PDF, doublons…
 ```
 
 ## App Android « Parro Health » (`android/`)
 
-Kotlin, Jetpack Compose (Material 3, couleurs dynamiques), AGP 9.5, `compileSdk` 37.1, `targetSdk` 36,
-`minSdk` 29. Identifiant `fr.parro.santesync` conservé depuis « Santé Sync » (le changer ferait perdre
-les permissions Health Connect).
+Kotlin, Jetpack Compose (Material 3), AGP 9.5, `compileSdk` 37.1, `targetSdk` 36, `minSdk` 29, R8 activé
+(APK de ~6 Mio). Identifiant `fr.parro.santesync`, gardé depuis « Santé Sync » : le changer ferait perdre
+les permissions Health Connect.
 
-- **Synchro** (inchangée sur le fond) : Health Connect → `POST /ingest`, toutes les heures (WorkManager)
-  ou à la demande ; la ligne de statut et l'en-tête `User-Agent` indiquent **auto** ou **manuel** ; l'écran
-  Réglages affiche la prochaine exécution prévue et propose l'exemption d'optimisation de batterie.
-- **FC au repos calculée** sur le téléphone (Samsung ne la publie pas) : plus basse moyenne glissante sur
-  30 min des mesures de FC (~1/min) pendant chaque nuit de 3 h et plus, et moyenne de la nuit ; seuls ces
-  deux chiffres sont envoyés. Rattrapage d'un an au premier lancement de la version.
-- **Graphiques** : Accueil, Sommeil (phases, score), Cœur (FC au repos/sommeil, HRV, stress, FC jour),
-  Activité (pas, séances), Tendances (semaine/mois/année depuis 2015). Données relues sur le serveur par
-  `GET /api/v1/…` après une connexion OAuth (mot de passe + TOTP dans un onglet de navigateur, PKCE,
-  client public) ; jetons chiffrés par une clé AES du Keystore Android.
-- La HRV n'est pas calculable depuis Health Connect (pas d'intervalles entre battements) : elle vient des
-  exports Samsung Health importés sur le serveur.
+- **Interface** : thème « nuit » qui suit le mode clair/sombre du téléphone, une couleur fixe par domaine
+  (sommeil indigo, cœur corail, HRV turquoise, activité vert, corps ambre), chiffres en Space Grotesk
+  **embarquée** (licence SIL OFL, `android/FONT-LICENSE-SpaceGrotesk.txt`), graphiques maison en Compose
+  (`ui/Charts.kt` : barres et courbes qu'on parcourt au doigt, anneaux, hypnogramme).
+- **Synchro** : WorkManager toutes les heures, et toutes les 15 min de 5 h à 11 h pour que le rapport parte
+  vite ; API Changes de Health Connect (seul le neuf part, les suppressions suivent) ; `User-Agent` et ligne
+  d'état indiquent auto, matin ou manuel.
+- **FC au repos calculée** (Samsung ne la publie pas) : plus basse moyenne glissante sur 30 min pendant
+  chaque nuit de 3 h et plus ; seuls ce chiffre et la moyenne de la nuit sont envoyés.
+- **Export Samsung Health** : partager le zip vers l'app (ou le choisir dans Profil) l'envoie au serveur par
+  morceaux, qui l'importe seul. C'est la seule source de la HRV nocturne, des scores de sommeil et du stress.
+- **Lecture** : OAuth (mot de passe + TOTP dans un onglet de navigateur, PKCE, client public), jetons chiffrés
+  par une clé AES du Keystore.
+- **Notifications locales** : rapport prêt (texte neutre si l'app est verrouillée), rappel de pesée
+  (quotidien ou hebdomadaire, muet si une pesée existe déjà dans Health Connect).
+- **Widget** d'écran d'accueil (masqué si l'app est verrouillée), **verrouillage biométrique**, écran
+  **Diagnostic** de ce que Health Connect contient réellement. Aucune permission de santé reproductive.
 
 ### Compiler et signer
 
 ```sh
 cd android
-./gradlew assembleDebug lintDebug          # ce que fait la CI (sans aucune clé)
+./gradlew assembleDebug lintDebug testDebugUnitTest    # ce que fait la CI (sans aucune clé)
 ```
 
 La **clé de signature stable** (« Parro Health — clé de signature Android » dans le coffre gestionnaire de secrets) ne
 quitte pas l'infrastructure : l'APK de version est signé dans le bac à sable, clé tirée du coffre puis
-détruite, avec les variables `PARRO_SIGNING_STORE_FILE`, `PARRO_SIGNING_STORE_PASSWORD`,
-`PARRO_SIGNING_KEY_ALIAS`, `PARRO_SIGNING_KEY_PASSWORD` et `./gradlew assembleRelease`.
-Certificat : `CN=Parro Health`, SHA-256 `40:09:F2:CB:…:25:5B`.
+détruite, avec `PARRO_SIGNING_STORE_FILE`, `PARRO_SIGNING_STORE_PASSWORD`, `PARRO_SIGNING_KEY_ALIAS`,
+`PARRO_SIGNING_KEY_PASSWORD` et `./gradlew assembleRelease`. Certificat : `CN=Parro Health`,
+SHA-256 `40:09:F2:CB:…:25:5B`.
 
 ### Installation
 
-Samsung Health → Réglages → Health Connect : synchronisation active. Installer l'APK ; Réglages de l'app :
-URL + jeton d'ingestion, **Autoriser** (tout cocher, arrière-plan et historique compris), **Exempter de
-l'optimisation de batterie**, **Se connecter** (graphiques).
+1. Samsung Health → Réglages → Health Connect : synchronisation active (et Google Health pour la balance).
+2. Installer l'APK, puis dans **Profil** : *Connexion au serveur* (URL + jeton d'ingestion), *Autorisations
+   Health Connect* (tout cocher, arrière-plan et historique compris), *Exempter de l'optimisation de
+   batterie*, *Se connecter* (lecture).
+3. Facultatif : envoyer un premier export Samsung Health pour l'historique et la HRV.
 
 ## Limites connues
 
-- Seuls les types que Samsung Health écrit réellement dans Health Connect arrivent ; `get_sync_status`
-  dit lesquels. Le score de sommeil, le stress, l'âge vasculaire, etc. ne passent pas par Health Connect.
-- Une donnée supprimée dans Health Connect n'est pas supprimée côté serveur (pas encore d'API Changes).
-- Le code de lecture Health Connect n'a pas de test automatique (la bibliothèque de faux client
-  `connect-testing` n'existe qu'en alpha liée à d'autres versions) : à valider sur l'appareil.
+- Seul ce que les applis écrivent réellement dans Health Connect arrive ; l'écran Diagnostic et
+  `get_sync_status` le montrent. HRV nocturne, scores de sommeil et stress n'existent que via les exports
+  Samsung, donc à jour au dernier export.
+- Google Health ne publie que les pesées récentes : l'historique plus ancien de la balance n'arrive pas.
+- La FC au repos n'existe que depuis l'installation de la version qui la calcule (rattrapage d'un an).
+- Le code de lecture Health Connect n'a pas de test automatique (pas de faux client stable) : il se valide
+  sur l'appareil, avec l'écran Diagnostic.
