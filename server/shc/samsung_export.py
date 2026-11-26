@@ -47,6 +47,7 @@ EXERCISE_CODES = {
 SLEEP_STAGES = {40001: "awake", 40002: "light", 40003: "deep", 40004: "rem"}
 MAX_SLEEP = timedelta(hours=16)
 # Bornes de plausibilité des mesures ponctuelles (artefacts de capteur écartés).
+MAX_JSON_BYTES = 20 * 1024 * 1024  # une courbe HRV d'une nuit pèse quelques Ko
 PLAUSIBLE = {"weight": (25, 300), "body_fat": (2, 70), "oxygen_saturation": (70, 100)}
 
 
@@ -84,7 +85,7 @@ class Export:
 
     def binning(self, table: str, filename: str) -> Any:
         info = self.jsons.get((table, filename))
-        if info is None:
+        if info is None or info.file_size > MAX_JSON_BYTES:  # fichier anormal (ou bombe de décompression)
             return None
         with self.z.open(info) as f:
             return json.load(f)

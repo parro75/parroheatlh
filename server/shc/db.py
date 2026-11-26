@@ -129,6 +129,25 @@ def _without_duplicates(rows: list[tuple[Row, float]], field: str) -> list[Row]:
     return [r for r, _ in kept]
 
 
+# Textes libres : longueur plafonnée (tronquée, pour ne jamais bloquer une synchro). Ils finissent devant
+# Claude (MCP) et le modèle local : plus court = moins de place pour une tentative d'injection de consignes.
+FREE_TEXT_MAX = {"note": 500, "title": 200}
+MAX_TAGS, MAX_TAG_LEN = 12, 40
+
+
+def _cap_free_text(rec_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    out = dict(data)
+    for k, n in FREE_TEXT_MAX.items():
+        if isinstance(out.get(k), str) and len(out[k]) > n:
+            out[k] = out[k][:n]
+    if rec_type == "journal":
+        tags = out.get("tags") or []
+        if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
+            raise RecordError("journal : tags doit être une liste de textes")
+        out["tags"] = [t[:MAX_TAG_LEN] for t in tags[:MAX_TAGS]]
+    return out
+
+
 class Store:
     def __init__(self, path: str, fallback_tz: tzinfo):
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -158,6 +177,7 @@ class Store:
         data = raw.get("data") or {}
         if not isinstance(data, dict):
             raise RecordError("data doit être un objet")
+        data = _cap_free_text(rec_type, data)
         offset = parse_offset(raw.get("zone_offset"))
         local = local_date_of(rec_type, start, end, offset, self.fallback_tz)
         return (
