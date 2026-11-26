@@ -1,9 +1,8 @@
 # Sécurité
 
 Parro Health manipule des **données de santé réelles**. Ce document résume le modèle de menace et les
-protections en place ; le détail est dans le [README](README.md#données-et-confidentialité), et la démarche
-« au plus près de HDS » (analyse de risques, registre, incidents, continuité, revue des accès) dans
-[`docs/conformite/`](docs/conformite/README.md).
+protections en place ; le détail est dans le [README](README.md#données-et-confidentialité). Les documents
+d'exploitation (analyse de risques, procédures d'incident et de reprise) sont tenus hors de ce dépôt.
 
 ## Signaler une faille
 

@@ -559,7 +559,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             f"Appareils appairés : {len(phones.list())} · clés d'accès : {len(keys)} · clients OAuth : {', '.join(names) or 'aucun'}",
             ("Événements sensibles : " + " ; ".join(s["sensitive"][:5])) if s["sensitive"] else "Aucun événement sensible",
             "Journal : chaîne intacte" if chain["ok"] else f"⚠ Journal : CHAÎNE ROMPUE (ligne {chain.get('broken_at')})",
-            "Vérifie que chaque appareil et chaque clé est encore à toi (docs/conformite/revue-des-acces.md).",
+            "Vérifie que chaque appareil et chaque clé est encore à toi, et qu'aucune connexion ne t'est inconnue.",
         ]
         return {"month": month_start.strftime("%Y%m"), "title": f"Parro Health : revue des accès de {mois}",
                 "message": "\n".join(lines), "summary": s, "chain_ok": chain["ok"]}

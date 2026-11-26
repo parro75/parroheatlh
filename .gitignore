@@ -7,3 +7,5 @@ server/data/
 *.db-wal
 *.db-shm
 dist/
+# Documents d'exploitation sensibles (analyse de risques, incidents, reprise) : hors du dépôt public
+docs/conformite/
