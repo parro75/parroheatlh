@@ -14,7 +14,7 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -23,7 +23,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, ha, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, config, ha, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -292,6 +292,20 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except queries.QueryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+    # ---- fiche PDF pour un rendez-vous médical : générée en mémoire, jamais écrite sur le disque ----------
+    @app.get("/api/v1/pdf/summary")
+    async def pdf_summary(request: Request) -> Response:
+        await require_token(request)
+        today = datetime.now(settings.tz).date()
+        try:
+            months = int(request.query_params.get("months", "3"))
+            data = await run_in_threadpool(pdf.summary, store, today, months, datetime.now(settings.tz))
+        except (ValueError, queries.QueryError):
+            raise HTTPException(status_code=422, detail="months : 3, 6 ou 12") from None
+        return Response(data, media_type="application/pdf", headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="synthese-sante-{today.isoformat()}-{months}-mois.pdf"'})
 
     # ---- Home Assistant : jeton dédié, UNE route en lecture (tableau de bord visible par Parro seul) ----
     ha_auth = f"Bearer {settings.ha_token}".encode() if settings.ha_token else None

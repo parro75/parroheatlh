@@ -188,6 +188,7 @@ fun HomeScreen(refresh: Int, onLogin: () -> Unit) {
             }
             Section("Pas — 14 jours") { StepsBars(d.steps, 14) }
             Section("Sommeil — 14 nuits") { SleepBars(d.sleep, 14) }
+            MedicalPdfCard(onLogin)
             Text(
                 "Synchro du téléphone : ${t.str("last_phone_sync")?.take(16)?.replace('T', ' ') ?: "jamais"} (UTC)" +
                     (t.str("last_export_day")?.let { " · dernier export Samsung : ${shortDate(it)}" } ?: ""),

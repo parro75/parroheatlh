@@ -52,6 +52,48 @@ def _per_day(store: Store, rtype: str, field: str, start: date, end: date) -> di
     return out
 
 
+WEIGHT_WEEK_DELTA = 2.0  # kg d'écart entre la moyenne des pesées des 7 derniers jours et celle des 7 précédents
+WEIGHT_4W_DELTA = 1.5  # kg, rapport hebdomadaire : semaine vs 4 semaines précédentes
+
+
+def kg_text(v: float, signed: bool = False) -> str:
+    """« 82,4 kg », « +0,8 kg », « −1,2 kg » : mis en forme ici, le modèle recopie sans calculer."""
+    s = f"{abs(v):.1f}".replace(".", ",") + " kg"
+    if not signed:
+        return s
+    return ("+" if v > 0 else "−" if v < 0 else "±") + s
+
+
+def _avg(values: dict[str, float], start: date, end: date) -> float | None:
+    v = [x for k, x in values.items() if start.isoformat() <= k <= end.isoformat()]
+    return mean(v) if v else None
+
+
+def weight_facts(store: Store, d: date) -> dict[str, Any] | None:
+    """Dernière pesée et variations LISSÉES (moyennes des pesées, pas deux pesées isolées).
+
+    change_1w_kg : 7 derniers jours vs 7 jours d'avant ; change_4w_kg : 7 derniers jours vs il y a 4 semaines.
+    fresh : pesée aujourd'hui ou hier (sinon le rapport du matin n'en parle pas).
+    """
+    w = _per_day(store, "weight", "kg", d - timedelta(days=41), d)
+    if not w:
+        return None
+    last = max(w)
+    out: dict[str, Any] = {"kg": round(w[last], 1), "date": last,
+                           "fresh": date.fromisoformat(last) >= d - timedelta(days=1)}
+    fat = _per_day(store, "body_fat", "percent", date.fromisoformat(last), date.fromisoformat(last))
+    if fat:
+        out["body_fat_pct"] = round(fat[last], 1)
+    recent = _avg(w, d - timedelta(days=6), d)
+    prev = _avg(w, d - timedelta(days=13), d - timedelta(days=7))
+    ago4 = _avg(w, d - timedelta(days=34), d - timedelta(days=28))
+    if recent is not None and prev is not None:
+        out["change_1w_kg"] = round(recent - prev, 1)
+    if recent is not None and ago4 is not None:
+        out["change_4w_kg"] = round(recent - ago4, 1)
+    return out
+
+
 def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
     """Faits du bilan du jour d (jour du réveil) et signaux, comparés aux moyennes personnelles."""
     flags: list[dict[str, str]] = []
@@ -147,11 +189,13 @@ def facts(store: Store, d: date, now: datetime | None = None) -> dict[str, Any]:
         if min(sp) < SPO2_LOW:
             flags.append({"level": "attention", "text": f"SpO2 minimale à {_r(min(sp), 1)} %"})
 
-    # ---- poids récent ---------------------------------------------------------------------------
-    w = _per_day(store, "weight", "kg", d - timedelta(days=7), d)
-    if w:
-        k = max(w)
-        out["weight"] = {"kg": round(w[k], 1), "date": k}
+    # ---- poids (balance) : tendance lissée, signal seulement le jour d'une pesée -------------------------
+    if (wf := weight_facts(store, d)):
+        out["weight"] = wf
+        ch = wf.get("change_1w_kg")
+        if wf["fresh"] and ch is not None and abs(ch) >= WEIGHT_WEEK_DELTA:
+            flags.append({"level": "attention",
+                          "text": f"Poids : {kg_text(ch, signed=True)} en une semaine (moyenne des pesées)"})
 
     # ---- journal : ce qui a été noté depuis hier midi (rappelé tel quel, jamais interprété) ----------------
     ev = [e for e in queries.journal(store, yesterday, d)["events"]
@@ -181,6 +225,10 @@ def fallback_text(f: dict[str, Any]) -> str:
         lines.append(f"FC au repos : {r['bpm']} bpm" + (f" (moyenne 28 j : {r['avg28']})" if r.get("avg28") else "") + ".")
     if (s := f.get("steps_yesterday")):
         lines.append(f"Hier : {s['count']} pas" + (f" (moyenne {s['avg28']})" if s.get("avg28") else "") + ".")
+    if (w := f.get("weight")) and w.get("fresh"):
+        lines.append(f"Poids : {kg_text(w['kg'])}"
+                     + (f" ({kg_text(w['change_4w_kg'], signed=True)} en 4 semaines)" if w.get("change_4w_kg") is not None else "")
+                     + ".")
     if f.get("journal"):
         lines.append("Noté dans le journal : " + " ; ".join(", ".join(e["tags"]) + f" ({e['time']})" for e in f["journal"]) + ".")
     if f.get("flags"):
@@ -261,6 +309,8 @@ def _period_stats(store: Store, start: date, end: date, g: dict[str, Any] | None
     steps = _per_day(store, "steps_daily", "count", start, end)
     ws = queries.workouts(store, start, end)["workouts"]
     stress = list(_per_day(store, "stress_daily", "avg", start, end).values())
+    weights = list(_per_day(store, "weight", "kg", start, end).values())
+    fats = list(_per_day(store, "body_fat", "percent", start, end).values())
     return {
         "nights": len(nights),
         "asleep_avg_min": _r(mean(asleep)) if asleep else None,
@@ -273,6 +323,9 @@ def _period_stats(store: Store, start: date, end: date, g: dict[str, Any] | None
         "workouts": len(ws),
         "workout_min": _r(sum(w.get("duration_min") or 0 for w in ws)),
         "stress_avg": _r(mean(stress)) if stress else None,
+        "weighings": len(weights),
+        "weight_avg_kg": round(mean(weights), 1) if weights else None,
+        "body_fat_avg_pct": round(mean(fats), 1) if fats else None,
         **({"nights_at_sleep_goal": sum(1 for a in asleep if a >= g["sleep_min"]),
             "days_at_steps_goal": sum(1 for v in steps.values() if v >= g["steps"])} if g else {}),
     }
@@ -297,12 +350,19 @@ def weekly_facts(store: Store, d: date) -> dict[str, Any]:
         flags.append({"level": "info", "text": f"Semaine moins active : {week['steps_avg']} pas/jour (habituellement {base['steps_avg']})"})
     if week["workouts"] == 0:
         flags.append({"level": "info", "text": "Aucune séance cette semaine"})
+    weight_change = None
+    if week["weight_avg_kg"] is not None and base["weight_avg_kg"] is not None:
+        weight_change = round(week["weight_avg_kg"] - base["weight_avg_kg"], 1)
+        if abs(weight_change) >= WEIGHT_4W_DELTA:
+            flags.append({"level": "info", "text": f"Poids moyen {'en hausse' if weight_change > 0 else 'en baisse'} : "
+                                                   f"{kg_text(week['weight_avg_kg'])} ({kg_text(weight_change, signed=True)} "
+                                                   f"vs 4 semaines précédentes)"})
     tags: dict[str, int] = {}
     for e in queries.journal(store, start, end)["events"]:
         for t in e["tags"]:
             tags[t] = tags.get(t, 0) + 1
     return {"week": week_key(d), "start": start.isoformat(), "end": end.isoformat(), "goals": g, "this_week": week,
-            "previous_4_weeks": base, "journal_tags": tags, "flags": flags}
+            "previous_4_weeks": base, "weight_change_kg": weight_change, "journal_tags": tags, "flags": flags}
 
 
 def weekly_fallback(f: dict[str, Any]) -> str:
@@ -311,5 +371,9 @@ def weekly_fallback(f: dict[str, Any]) -> str:
              + (f", {queries.hm_text(w['asleep_avg_min'])} de sommeil en moyenne" if w["asleep_avg_min"] else "") + "."]
     if w["steps_avg"]:
         lines.append(f"Pas : {w['steps_avg']} par jour ; séances : {w['workouts']} ({w['workout_min']} min).")
+    if w.get("weight_avg_kg") is not None:
+        lines.append(f"Poids moyen : {kg_text(w['weight_avg_kg'])}"
+                     + (f" ({kg_text(f['weight_change_kg'], signed=True)} vs 4 semaines précédentes)"
+                        if f.get("weight_change_kg") is not None else "") + ".")
     lines.append("À noter : " + " ; ".join(x["text"] for x in f["flags"]) + "." if f["flags"] else "Rien d'inhabituel.")
     return "\n".join(lines)

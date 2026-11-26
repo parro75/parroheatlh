@@ -35,8 +35,8 @@ SYSTEM = (
     "Utilise UNIQUEMENT les valeurs fournies, recopiées telles quelles : ne calcule rien, ne compare que ce "
     "qui est donné côte à côte (valeur / moyenne_28j), ne pose aucun diagnostic, ne donne aucun conseil. "
     "Ne parle PAS d'alertes ni de points à surveiller : ils sont ajoutés automatiquement après ton texte. "
-    "Ordre : la nuit, la fréquence cardiaque au repos, l'activité d'hier, puis ce qui a été noté dans le "
-    "journal s'il y en a (sans en tirer de lien). Si « nuit_reçue » est faux, dis que la nuit n'est pas encore arrivée."
+    "Ordre : la nuit, la fréquence cardiaque au repos, l'activité d'hier, le poids s'il est donné, puis ce qui "
+    "a été noté dans le journal s'il y en a (sans en tirer de lien). Si « nuit_reçue » est faux, dis que la nuit n'est pas encore arrivée."
 )
 
 
@@ -49,7 +49,7 @@ SYSTEM_WEEK = (
     "Utilise UNIQUEMENT les valeurs fournies, recopiées telles quelles : ne calcule rien, compare seulement "
     "« semaine » et « 4_semaines_précédentes » quand les deux sont donnés, aucun diagnostic ni conseil. "
     "Ne parle PAS d'alertes : elles sont ajoutées automatiquement après ton texte. "
-    "Couvre le sommeil, la fréquence cardiaque au repos, l'activité, puis le journal s'il y en a."
+    "Couvre le sommeil, la fréquence cardiaque au repos, l'activité, le poids s'il est donné, puis le journal s'il y en a."
 )
 
 
@@ -80,6 +80,18 @@ def hm(minutes) -> str | None:
     return f"{m // 60} h {m % 60:02d}"
 
 
+def kg(v, signed: bool = False):
+    """Même mise en forme que le serveur (« 82,4 kg », « −1,2 kg ») : le modèle recopie, il ne calcule pas."""
+    if v is None:
+        return None
+    s = f"{abs(v):.1f}".replace(".", ",") + " kg"
+    return (("+" if v > 0 else "\u2212" if v < 0 else "\u00b1") + s) if signed else s
+
+
+def pct(v):
+    return None if v is None else f"{v:.1f}".replace(".", ",") + " %"
+
+
 def compact_facts(f: dict) -> dict:
     """Faits du matin, clés explicites et valeurs déjà mises en forme : rien à calculer ni à interpréter."""
     out: dict = {"date": f.get("date"), "nuit_reçue": bool(f.get("ready"))}
@@ -101,6 +113,10 @@ def compact_facts(f: dict) -> dict:
             "nombre": len(ws), "types": ", ".join(sorted({str(w.get("type")) for w in ws if w.get("type")})),
             "durée_totale_min": round(sum(w.get("duration_min") or 0 for w in ws)),
             "distance_totale_km": round(dist, 1) if dist else None}.items() if v is not None}
+    if (w := f.get("weight")) and w.get("fresh"):  # seulement le jour d'une pesée (ou le lendemain)
+        out["poids"] = {k: v for k, v in {
+            "dernière_pesée": kg(w.get("kg")), "masse_grasse": pct(w.get("body_fat_pct")),
+            "variation_sur_4_semaines": kg(w.get("change_4w_kg"), signed=True)}.items() if v is not None}
     if (j := f.get("journal")):
         out["journal"] = [{"moment": e["time"], "noté": ", ".join(e["tags"]), **({"note": e["note"]} if e.get("note") else {})} for e in j]
     return out
@@ -113,9 +129,11 @@ def compact_week(f: dict) -> dict:
             "heure_moyenne_de_réveil": w.get("wake_avg"), "écart_type_réveil_min": w.get("wake_sd_min"),
             "score_sommeil_moyen": w.get("sleep_score_avg"), "fc_repos_moyenne_bpm": w.get("resting_hr_avg"),
             "pas_par_jour": w.get("steps_avg"), "séances": w.get("workouts"), "minutes_de_séance_au_total": w.get("workout_min"),
-            "stress_moyen": w.get("stress_avg")}.items() if v is not None}
+            "stress_moyen": w.get("stress_avg"), "poids_moyen": kg(w.get("weight_avg_kg")),
+            "pesées": w.get("weighings") or None}.items() if v is not None}
     return {"du": f.get("start"), "au": f.get("end"), "semaine": block(f["this_week"]),
             "4_semaines_précédentes": block(f["previous_4_weeks"]),
+            **({"variation_poids_moyen": kg(f["weight_change_kg"], signed=True)} if f.get("weight_change_kg") is not None else {}),
             **({"journal_nombre_de_fois": f["journal_tags"]} if f.get("journal_tags") else {})}
 
 

@@ -86,6 +86,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Fiche PDF pour le médecin : URI temporaire vers le cache privé, lecture seule, sur geste explicite. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fiches"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/fiches_paths" />
+        </provider>
+
         <!-- Widget d'écran d'accueil (rien d'affiché si l'app est verrouillée). -->
         <receiver
             android:name=".ParroWidgetReceiver"

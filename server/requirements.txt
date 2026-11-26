@@ -1,3 +1,6 @@
 mcp==2.3.0
 fastapi==0.165.0
 uvicorn==0.54.0
+fpdf2==2.9.0
+pillow==13.0.0
+fonttools==4.68.0

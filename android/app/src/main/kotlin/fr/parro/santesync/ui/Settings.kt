@@ -158,7 +158,7 @@ fun SettingsScreen(actions: SettingsActions, resumeTick: Int, onLoginChanged: ()
             if (mode != fr.parro.santesync.WeighReminder.OFF) {
                 Choices(fr.parro.santesync.WeighReminder.TIME_OPTIONS.map { it.toString() to "${it / 60} h ${"%02d".format(it % 60)}".replace(" h 00", " h") },
                     minutes.toString()) { minutes = it.toInt(); prefs.weighMinutes = minutes; apply() }
-                Text("Pas de rappel si tu t'es déjà pesé ce jour-là (balance lue dans Health Connect).",
+                Text("Pas de rappel si une pesée existe déjà ce jour-là (balance lue dans Health Connect).",
                     style = MaterialTheme.typography.bodySmall)
             }
         }

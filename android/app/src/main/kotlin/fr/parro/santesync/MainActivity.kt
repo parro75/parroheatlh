@@ -118,6 +118,7 @@ class MainActivity : FragmentActivity() {
         }
         askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
         WeighReminder.schedule(this, WeighReminder.Policy.AT_START) // sans effet si le rappel est désactivé
+        if (savedInstanceState == null) MedicalPdf.clear(this) // la fiche PDF ne survit pas à un redémarrage de l'app
         // Les rapports sont annoncés par l'appli elle-même : demander l'autorisation dès l'ouverture.
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
