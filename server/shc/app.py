@@ -23,7 +23,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, config, ha, pdf, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, config, devices, ha, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -217,6 +217,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         log.info("import d'export (téléphone) : %d enregistrements écrits", sum(w for _, w in res.values()))
         return {k: {"candidates": c, "written": w} for k, (c, w) in res.items()}
 
+    phones = devices.Devices(settings.db_path)
     exports = uploads.Uploads(settings.db_path, os.path.join(os.path.dirname(settings.db_path), "uploads"), run_import)
     mcp = build_mcp(store, settings, provider, reports)
     security = TransportSecuritySettings(
@@ -241,11 +242,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         reports.close()
         watch.close()
         exports.close()
+        phones.close()
 
     app = FastAPI(title="samsung-health-connector", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.oauth = provider
+    app.state.phones = phones
     expected = f"Bearer {settings.ingest_token}".encode()
 
     @app.get("/healthz")
@@ -308,6 +311,18 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except queries.QueryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+    # ---- appairage d'un téléphone : clé publique ECDSA P-256 (clé privée dans son Keystore matériel) ----
+    @app.post("/api/v1/device")
+    async def device_register(request: Request) -> JSONResponse:
+        await require_token(request)  # jeton OAuth : mot de passe + TOTP ont été saisis
+        b = await json_body(request)
+        try:
+            did = await run_in_threadpool(phones.register, str(b.get("public_key", "")), str(b.get("label", "")))
+        except devices.DeviceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        log.info("appareil appairé : %s", did)
+        return JSONResponse({"device_id": did, "mode": settings.device_signature}, headers={"Cache-Control": "no-store"})
 
     # ---- fiche PDF pour un rendez-vous médical : générée en mémoire, jamais écrite sur le disque ----------
     @app.get("/api/v1/pdf/summary")
@@ -431,6 +446,24 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
             raise HTTPException(status_code=401, detail="unauthorized")
 
+    def require_device(request: Request, body: bytes) -> None:
+        """Écriture : en plus du jeton, signature d'un téléphone appairé (obligatoire en mode required)."""
+        if settings.device_signature == "off":
+            return
+        try:
+            did = phones.verify(request.method, request.url.path, request.headers, body)
+        except devices.DeviceError as exc:
+            log.warning("écriture refusée : %s", exc)
+            raise HTTPException(status_code=401, detail=f"signature de l'appareil : {exc}") from None
+        if did is None and settings.device_signature == "required":
+            raise HTTPException(status_code=401, detail="signature de l'appareil exigée (appairer l'app)")
+
+    async def require_write(request: Request) -> bytes:
+        require_ingest(request)
+        body = await request.body()
+        require_device(request, body)
+        return body
+
     def upload_call(fn, *args):
         try:
             return JSONResponse(fn(*args), headers={"Cache-Control": "no-store"})
@@ -439,24 +472,25 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
 
     @app.post("/ingest-export/start")
     async def export_start(request: Request) -> JSONResponse:
-        require_ingest(request)
+        await require_write(request)
         b = await json_body(request)
         return await run_in_threadpool(upload_call, exports.start, int(b.get("size", 0)), str(b.get("sha256", "")).lower())
 
     @app.put("/ingest-export/{uid}/{index}")
     async def export_chunk(uid: str, index: int, request: Request) -> JSONResponse:
-        require_ingest(request)
-        data = await request.body()
+        if int(request.headers.get("content-length") or 0) > uploads.CHUNK_SIZE + 1024:
+            raise HTTPException(status_code=413, detail="morceau trop grand")
+        data = await require_write(request)
         return await run_in_threadpool(upload_call, exports.put, uid, index, data)
 
     @app.post("/ingest-export/{uid}/finish")
     async def export_finish(uid: str, request: Request) -> JSONResponse:
-        require_ingest(request)
+        await require_write(request)
         return await run_in_threadpool(upload_call, exports.finish, uid)
 
     @app.get("/ingest-export/{uid}")
     async def export_status(uid: str, request: Request) -> JSONResponse:
-        require_ingest(request)
+        await require_write(request)
         return await run_in_threadpool(upload_call, exports.status, uid)
 
     @app.post("/ingest")
@@ -469,6 +503,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         body = await request.body()
         if len(body) > MAX_BODY:
             raise HTTPException(status_code=413, detail="payload too large")
+        require_device(request, body)
         try:
             payload = json.loads(body)
         except ValueError:

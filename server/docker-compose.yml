@@ -3,7 +3,7 @@
 services:
   shc:
     build: .
-    image: shc:0.11.3
+    image: shc:0.12.0
     container_name: shc
     restart: unless-stopped
     user: "10001:10001"
@@ -17,6 +17,8 @@ services:
       UNIX_SOCKET: /run/shc/shc.sock
       # Volume chiffré (deploy/volume-chiffre/) : sans ce fichier dans /data, refus de démarrer
       # (sinon, volume verrouillé = base vide créée EN CLAIR dans le dossier de montage).
+      # Écritures signées par le téléphone appairé : optional pendant la mise en route, puis required.
+      DEVICE_SIGNATURE: optional
       DATA_MARKER: .volume-chiffre   # retirer cette ligne si la base n'est pas sur un volume chiffré
 
     # Base SQLite HORS de /opt, dans un volume LUKS2 (deploy/volume-chiffre/) monté sur /var/lib/sante ;

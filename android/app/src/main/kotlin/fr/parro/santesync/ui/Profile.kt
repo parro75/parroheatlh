@@ -172,6 +172,10 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
         ParroCard {
             SectionLabel("SYNCHRONISATION")
             Body(prefs.lastStatus.ifEmpty { "Jamais synchronisé" })
+            val paired = remember(resumeTick, tick, syncing) { prefs.deviceId }
+            Muted(if (paired.isNotEmpty()) "✓ Envois signés par la clé matérielle de ce téléphone (appareil ${paired.take(8)})"
+                else "Envois pas encore signés : connecte la lecture (plus bas) pour appairer ce téléphone",
+                color = if (paired.isNotEmpty()) c.good else c.warn)
             Muted("Prochaine synchro automatique : " + (nextRun?.let(::fmt) ?: "non planifiée"))
             PrimaryButton(if (syncing) "Synchronisation…" else "Synchroniser maintenant", onSync, enabled = !syncing)
             if (exempt) Muted("✓ Exemptée de l'optimisation de batterie : Android ne retardera pas la synchro.")

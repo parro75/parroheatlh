@@ -147,7 +147,8 @@ class ExportUploadWorker(context: Context, params: WorkerParameters) : Coroutine
 
     private suspend fun call(method: String, path: String, body: ByteArray?, type: String?): JSONObject =
         withContext(Dispatchers.IO) {
-            val conn = URL(prefs.serverUrl + path).openConnection() as HttpURLConnection
+            val url = URL(prefs.serverUrl + path)
+            val conn = url.openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = method
                 conn.connectTimeout = 15_000
@@ -155,6 +156,7 @@ class ExportUploadWorker(context: Context, params: WorkerParameters) : Coroutine
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("Authorization", "Bearer ${prefs.token}")
                 conn.setRequestProperty("User-Agent", Sync.userAgent("import"))
+                DeviceKey.headers(method, url, body ?: ByteArray(0)).forEach { (k, v) -> conn.setRequestProperty(k, v) }
                 if (body != null) {
                     conn.doOutput = true
                     type?.let { conn.setRequestProperty("Content-Type", it) }

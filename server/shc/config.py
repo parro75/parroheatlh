@@ -27,6 +27,8 @@ class Settings:
     report_token: str = ""  # job de rédaction (Ollama) : lit le bilan du jour, dépose le texte ; rien d'autre
     ha_token: str = ""  # Home Assistant : lit /api/v1/ha/summary et RIEN d'autre (tableau de bord)
     report_deadline_hour: int = 12  # sans nuit reçue à cette heure, le rapport part quand même
+    # Écritures signées par le téléphone (shc.devices) : off | optional (vérifiée si présente) | required
+    device_signature: str = "optional"
 
     @property
     def mcp_path(self) -> str:
@@ -79,7 +81,15 @@ def load() -> Settings:
         report_token=_report_token(ingest),
         ha_token=_ha_token(ingest),
         report_deadline_hour=int(os.environ.get("REPORT_DEADLINE_HOUR", "12")),
+        device_signature=_device_signature(),
     )
+
+
+def _device_signature() -> str:
+    mode = os.environ.get("DEVICE_SIGNATURE", "optional").strip().lower()
+    if mode not in ("off", "optional", "required"):
+        raise SystemExit("DEVICE_SIGNATURE : off, optional ou required")
+    return mode
 
 
 def _ha_token(ingest: str) -> str:

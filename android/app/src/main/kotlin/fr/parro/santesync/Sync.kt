@@ -75,6 +75,9 @@ object Sync {
         if (granted.none { it in HealthReader.READ_PERMISSIONS })
             return SyncResult.Fatal("Aucune permission de lecture accordée")
 
+        // Écritures signées par ce téléphone : appairage une fois (connexion de lecture requise).
+        DeviceKey.ensurePaired(context)
+
         val now = Instant.now()
         val first = if (HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted) FIRST_IMPORT_HISTORY else FIRST_IMPORT
         // Nouveau calcul local (ou première synchro) : on relit toute la profondeur disponible.
@@ -123,7 +126,8 @@ object Sync {
 
     suspend fun postRecords(prefs: Prefs, records: JSONArray, trigger: Trigger): Int = withContext(Dispatchers.IO) {
         val body = JSONObject().put("records", records).toString().toByteArray(Charsets.UTF_8)
-        val conn = URL("${prefs.serverUrl}/ingest").openConnection() as HttpURLConnection
+        val url = URL("${prefs.serverUrl}/ingest")
+        val conn = url.openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 15_000
@@ -133,11 +137,13 @@ object Sync {
             conn.setRequestProperty("Authorization", "Bearer ${prefs.token}")
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("User-Agent", userAgent(trigger.label))
+            DeviceKey.headers("POST", url, body).forEach { (k, v) -> conn.setRequestProperty(k, v) }
             conn.setFixedLengthStreamingMode(body.size)
             conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code == 401 && "appareil" in text) prefs.deviceId = "" // révoqué ou inconnu : réappairer
             if (code !in 200..299) throw HttpStatusException(code, text)
             JSONObject(text).optInt("accepted", records.length())
         } finally {

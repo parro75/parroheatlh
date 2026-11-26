@@ -89,6 +89,11 @@ class Prefs(private val context: Context) {
         get() = sp.getString("widget_summary", "") ?: ""
         set(v) = sp.edit { putString("widget_summary", v) }
 
+    /** Identifiant de la clé d'appareil acceptée par le serveur (vide = pas encore appairé). */
+    var deviceId: String
+        get() = sp.getString("device_id", "") ?: ""
+        set(v) = sp.edit { putString("device_id", v) }
+
     /** Verrouillage biométrique à l'ouverture (option des Réglages). */
     var lockEnabled: Boolean
         get() = sp.getBoolean("lock_enabled", false)

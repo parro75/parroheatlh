@@ -4,6 +4,8 @@
   hash-password   demande un mot de passe et affiche son hachage (OWNER_PASSWORD_HASH)
   totp-uri        affiche l'URI otpauth:// de TOTP_SECRET (à scanner ou saisir dans l'appli TOTP)
   revoke-all      révoque tous les jetons OAuth émis (Claude devra se reconnecter)
+  devices         liste les téléphones appairés (écritures signées)
+  revoke-device ID   révoque un téléphone (perdu, remplacé) : ses écritures sont refusées
 """
 
 from __future__ import annotations
@@ -49,6 +51,16 @@ def main(argv: list[str]) -> None:
         conn = sqlite3.connect(os.environ.get("DB_PATH", "/data/health.db"), isolation_level=None)
         n = conn.execute("DELETE FROM oauth_tokens").rowcount
         print(f"{n} jeton(s) révoqué(s).")
+    elif cmd in ("devices", "revoke-device"):
+        from .devices import Devices
+        d = Devices(os.environ.get("DB_PATH", "/data/health.db"))
+        if cmd == "devices":
+            import datetime as dt
+            fmt = lambda t: dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "jamais"  # noqa: E731
+            for r in d.list():
+                print(f"{r['id']}  {r['label'] or '?':20}  appairé {fmt(r['created'])}  dernière écriture {fmt(r['last_used'])}")
+        else:
+            print("révoqué" if len(argv) > 1 and d.revoke(argv[1]) else "identifiant inconnu")
     else:
         print(__doc__)
         raise SystemExit(2)
