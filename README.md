@@ -237,3 +237,9 @@ ignorés par git.
 - La FC au repos n'existe que depuis l'installation de la version qui la calcule (rattrapage d'un an).
 - Le code de lecture Health Connect n'a pas de test automatique (pas de faux client stable) : il se valide
   sur l'appareil, avec l'écran Diagnostic.
+
+## Licence
+
+[GNU AGPL-3.0](LICENSE), © 2026 Parro. Tu peux utiliser, modifier et redistribuer ce code ; si tu fais
+tourner une version modifiée du serveur **pour d'autres personnes**, tu dois leur en fournir le code source.
+La police Space Grotesk est sous licence SIL OFL 1.1 (`android/FONT-LICENSE-SpaceGrotesk.txt`).
