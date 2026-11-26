@@ -322,7 +322,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         data = await run_in_threadpool(ha.summary, store, reports, datetime.now(settings.tz).date())
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
-    # ---- job de rédaction du rapport (machine Ollama) : jeton dédié, 3 routes seulement ---------------------
+    # ---- job de rédaction du rapport : jeton dédié, 3 routes seulement ---------------------
     report_auth = f"Bearer {settings.report_token}".encode() if settings.report_token else None
 
     def require_report_token(request: Request) -> None:

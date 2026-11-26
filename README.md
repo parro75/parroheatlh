@@ -9,9 +9,10 @@ qu'on héberge soi-même, et les rend lisibles partout :
 - dans un **rapport du matin** et un **rapport de la semaine**, calculés par règles et rédigés par un modèle
   de langage **local** (Ollama) ;
 - dans une **fiche PDF** pour un rendez-vous médical ;
-- dans un tableau de bord **Home Assistant** (chiffres seulement).
+- et, en option, dans un tableau de bord **Home Assistant** (chiffres seulement).
 
 Aucun service tiers ne voit les données au-delà de ce que Samsung Health et Google Health voient déjà.
+Seuls l'app et le serveur sont indispensables ; le job de rapport, Ollama et Home Assistant sont facultatifs.
 
 ```
 Galaxy Watch ─► Samsung Health ─┐                                ┌─ export Samsung Health (zip, HRV, scores,
@@ -25,7 +26,7 @@ Balance ─────► Google Health ───┴─► Health Connect (tél
           │ /mcp (OAuth)                 │ /api/v1/report-job/… (jeton dédié)  │ /api/v1/ha/summary (jeton dédié)
           ▼                              ▼                                     ▼
        Claude                 job de rapport (jobs/) + Ollama local     Home Assistant
-                              (rédige ; alertes de synchro par HA)
+                              (facultatif)                             (facultatif)
 ```
 
 ## Ce que fait le système
@@ -40,7 +41,7 @@ Balance ─────► Google Health ───┴─► Health Connect (tél
 | **Rapports** | faits et signaux calculés par règles sur le serveur ; le modèle local ne fait que rédiger ; annoncés par une notification **locale** de l'app, sans contenu de santé si l'app est verrouillée |
 | **Claude** | 15 outils MCP en lecture seule (voir plus bas) |
 | **Fiche médecin** | PDF de 3, 6 ou 12 mois généré en mémoire : tableau des mesures, courbes, nombre de jours par étiquette du journal (jamais les notes) |
-| **Home Assistant** | `GET /api/v1/ha/summary` : chiffres du jour seulement, pour un tableau de bord réservé au propriétaire |
+| **Home Assistant** (facultatif) | `GET /api/v1/ha/summary` : chiffres du jour seulement, pour un tableau de bord réservé au propriétaire ; route inexistante (404) sans `HA_TOKEN` |
 
 ## Arborescence
 
@@ -101,8 +102,10 @@ repos, HRV, pas, SpO2, poids (tendance lissée sur les moyennes de pesées), jou
 courte, FC au repos élevée, HRV basse, poids qui varie de plus de 2 kg en une semaine…) sont des règles
 testées, ajoutées **après** le texte : jamais confiés au modèle. Le job (`jobs/rapport_ia.py`, timers toutes
 les 10 min de 4 h à 12 h) envoie des faits déjà mis en forme au modèle local, contrôle sa réponse, et retombe
-sur un texte de secours si besoin. Le service `parro-surveillance` alerte (webhook Home Assistant, sans
-donnée de santé) si le téléphone ne synchronise plus, et rappelle d'envoyer un export Samsung chaque mois.
+sur un texte de secours si besoin. Sans job, l'app et Claude affichent quand même les faits et les signaux.
+Le service `parro-surveillance` alerte si le téléphone ne synchronise plus et rappelle d'envoyer un export
+Samsung chaque mois : vers un webhook **facultatif** qui reçoit `{"title", "message"}` (Home Assistant, ou
+tout autre service), sinon dans le journal du service. Ces alertes ne contiennent aucune donnée de santé.
 
 ### Sécurité
 
@@ -119,6 +122,8 @@ donnée de santé) si le téléphone ne synchronise plus, et rappelle d'envoyer 
 - **Fiche PDF** générée en mémoire, jamais écrite sur le disque du serveur.
 - **Notifications** : aucune donnée de santé ne passe par Home Assistant ni par Google ; le rapport est
   annoncé par l'app elle-même.
+- **Export partagé** : un zip partagé vers l'app n'est envoyé qu'après confirmation (nom, taille, appli
+  d'origine) — sans quoi une autre appli pourrait faire importer de fausses données.
 
 ### Configuration (`.env`)
 
@@ -127,8 +132,8 @@ donnée de santé) si le téléphone ne synchronise plus, et rappelle d'envoyer 
 | `INGEST_TOKEN`, `OWNER_PASSWORD_HASH`, `TOTP_SECRET` | générés par `python -m shc.admin init` (le hachage reste **entre apostrophes** : sinon `docker compose` interprète les `$` et le tronque en silence) |
 | `PUBLIC_URL` | URL publique (émetteur OAuth, ressource MCP) |
 | `TZ_LOCAL`, `DB_PATH` | fuseau des jours locaux, base SQLite |
-| `REPORT_TOKEN`, `REPORT_DEADLINE_HOUR` | job de rapport (facultatif) |
-| `HA_TOKEN` | résumé pour Home Assistant (facultatif) |
+| `REPORT_TOKEN`, `REPORT_DEADLINE_HOUR` | job de rapport (facultatif : sans jeton, ses routes répondent 404) |
+| `HA_TOKEN` | résumé pour Home Assistant (facultatif : sans jeton, la route répond 404) |
 | `UNIX_SOCKET` | socket d'écoute (sinon TCP 8080) — fixé par `docker-compose.yml` |
 | `MCP_ALLOWED_HOSTS`, `OAUTH_REDIRECT_URIS`, `APP_CLIENT_ID`, `APP_REDIRECT_URI` | valeurs par défaut adaptées |
 
@@ -149,9 +154,12 @@ Monter `/var/lib/sante-run` sur `/run/sante` dans le conteneur du reverse proxy 
 `deploy/Caddyfile.sante`. Dans Claude : Réglages → Connecteurs → *Ajouter un connecteur personnalisé* →
 `https://sante.example.org/mcp`, puis mot de passe + code TOTP et *Autoriser*.
 
-Job de rapport : copier `jobs/rapport_ia.py` dans `/opt/parro-rapport/`, les unités `jobs/*.service|timer`
-dans systemd, et créer `/etc/parro-sante/rapport.env` (`SANTE_URL`, `REPORT_TOKEN`, `OLLAMA_URL`, `MODEL`,
-`HA_WEBHOOK_URL`). `rapport_ia.py --apercu [modèle]` rédige le rapport du jour sans l'enregistrer.
+Job de rapport (facultatif) : copier `jobs/rapport_ia.py` dans `/opt/parro-rapport/`, les unités
+`jobs/*.service|timer` dans systemd, et créer `/etc/parro-sante/rapport.env` (mode 600) avec `SANTE_URL` et
+`REPORT_TOKEN` ; facultatifs : `OLLAMA_URL`, `MODEL` (défaut `mistral-nemo:12b`), `OWNER_NAME` (prénom par
+lequel le modèle s'adresse à toi), `ALERT_WEBHOOK_URL` (ou `HA_WEBHOOK_URL`). `rapport_ia.py --apercu [modèle]`
+rédige le rapport du jour sans l'enregistrer. Le bloc Caddy n'ouvre les routes du job et de Home Assistant
+qu'à une plage d'adresses à adapter.
 
 ### Tests
 
@@ -191,9 +199,8 @@ cd android
 ./gradlew assembleDebug lintDebug testDebugUnitTest    # ce que fait la CI (sans aucune clé)
 ```
 
-La **clé de signature stable** (« Parro Health — clé de signature Android » dans le coffre gestionnaire de secrets) ne
-quitte pas l'infrastructure : l'APK de version est signé dans le bac à sable, clé tirée du coffre puis
-détruite, avec `PARRO_SIGNING_STORE_FILE`, `PARRO_SIGNING_STORE_PASSWORD`, `PARRO_SIGNING_KEY_ALIAS`,
+La **clé de signature** n'est pas dans le dépôt : elle reste dans un gestionnaire de secrets, et l'APK de
+version est signé dans un environnement isolé, clé tirée du coffre puis détruite, avec `PARRO_SIGNING_STORE_FILE`, `PARRO_SIGNING_STORE_PASSWORD`, `PARRO_SIGNING_KEY_ALIAS`,
 `PARRO_SIGNING_KEY_PASSWORD` et `./gradlew assembleRelease`. Certificat : `CN=Parro Health`,
 SHA-256 `40:09:F2:CB:…:25:5B`.
 
@@ -204,6 +211,22 @@ SHA-256 `40:09:F2:CB:…:25:5B`.
    Health Connect* (tout cocher, arrière-plan et historique compris), *Exempter de l'optimisation de
    batterie*, *Se connecter* (lecture).
 3. Facultatif : envoyer un premier export Samsung Health pour l'historique et la HRV.
+
+## Données et confidentialité
+
+| Où | Quoi | Protection |
+|---|---|---|
+| Téléphone | Health Connect (géré par Android) ; journal non encore envoyé, résumé du widget, réglages | stockage privé de l'app, **exclu** des sauvegardes cloud et des transferts d'appareil ; jetons (OAuth et ingestion) **chiffrés** par une clé AES du Keystore ; verrouillage biométrique facultatif, qui masque aussi le widget, le texte des notifications et la miniature des applis récentes |
+| Réseau | toutes les requêtes | HTTPS obligatoire (URL en clair refusée, trafic en clair interdit par le manifeste) |
+| Serveur | base SQLite | volume privé du conteneur (mode 700) ; à sauvegarder **chiffrée** (par exemple avec `age`) |
+| Serveur | export Samsung reçu | écrit le temps de l'import (mode 600), puis écrasé et supprimé |
+| Serveur | fiche PDF | générée en mémoire, jamais écrite |
+| Claude | réponses des outils MCP | ce que Claude lit pour répondre, selon ta configuration de Claude |
+| Machine Ollama | faits du jour (dont le journal) | ne quittent pas cette machine ; aucune donnée de santé dans ses journaux |
+| Home Assistant | chiffres du jour | facultatif ; penser à exclure ces capteurs de l'historique et d'Assist |
+
+Les tests n'utilisent que des valeurs fictives. Aucun secret n'est dans le dépôt : `.env`, bases et APK sont
+ignorés par git.
 
 ## Limites connues
 

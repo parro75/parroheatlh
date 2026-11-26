@@ -121,6 +121,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Verrouillage actif : pas de miniature dans les applis récentes (les captures d'écran restent permises).
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!Prefs(this).lockEnabled)
         val away = SystemClock.elapsedRealtime() - backgroundedAt
         if (Prefs(this).lockEnabled && (backgroundedAt == 0L || away > 60_000)) {
             locked = true

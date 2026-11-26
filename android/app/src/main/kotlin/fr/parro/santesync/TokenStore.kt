@@ -62,7 +62,13 @@ class TokenStore(context: Context) {
 
     val isLoggedIn: Boolean get() = sp.contains("refresh")
 
-    fun clear() = sp.edit { clear() }
+    /** Jeton d'ingestion (écriture vers le serveur), chiffré comme les jetons OAuth (26/11/2026). */
+    var ingestToken: String?
+        get() = sp.getString("ingest", null)?.let(::decrypt)
+        set(v) = sp.edit { if (v.isNullOrEmpty()) remove("ingest") else putString("ingest", encrypt(v)) }
+
+    /** Déconnexion de la LECTURE seulement : le jeton d'ingestion (synchro) est gardé. */
+    fun clear() = sp.edit { remove("access"); remove("refresh"); remove("access_exp") }
 
     companion object {
         private const val ALIAS = "parro_health_tokens"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Rapport santé du matin — job de la machine Ollama (Ollama, GPU). Bibliothèque standard seulement.
+"""Rapports santé (matin et semaine) — job à lancer sur une machine qui a accès à Ollama (GPU conseillé).
+Bibliothèque standard seulement.
 
 Toutes les 10 min entre 4 h et 13 h (timer systemd) :
   1. GET  {SANTE_URL}/api/v1/report-job/pending   (jeton dédié REPORT_TOKEN)
@@ -7,11 +8,15 @@ Toutes les 10 min entre 4 h et 13 h (timer systemd) :
      le modèle local RÉDIGE à partir des faits ; il ne calcule ni ne juge rien (signaux déjà calculés
      par le serveur). Échec du modèle ou texte suspect → texte de secours fourni par le serveur.
      POST {SANTE_URL}/api/v1/report-job/narrative
-  3. POST {SANTE_URL}/api/v1/report-job/notified (rapport prêt). Depuis le 25/11/2026, c'est l'appli
-     Parro Health qui l'annonce (notification locale après sa synchro) : ni Home Assistant ni Google.
-     Le webhook HA ne sert plus qu'aux alertes de synchro et au rappel d'export (--surveillance).
+  3. POST {SANTE_URL}/api/v1/report-job/notified (rapport prêt). C'est l'appli Parro Health qui l'annonce
+     (notification locale après sa synchro) : aucun service tiers ne voit le texte.
 
-Configuration : /etc/parro-sante/rapport.env (600) — SANTE_URL, REPORT_TOKEN, OLLAMA_URL, MODEL, HA_WEBHOOK_URL.
+--surveillance (toutes les 30 min) : alerte si le téléphone ne synchronise plus, rappel mensuel d'export.
+Ces alertes (sans donnée de santé) partent vers un webhook FACULTATIF qui reçoit {"title", "message"} en
+JSON — par exemple un webhook Home Assistant. Sans webhook, elles sont seulement écrites dans le journal.
+
+Configuration : /etc/parro-sante/rapport.env (600) — SANTE_URL, REPORT_TOKEN ; facultatifs : OLLAMA_URL,
+MODEL, OWNER_NAME (prénom utilisé par le modèle pour s'adresser à toi), ALERT_WEBHOOK_URL (ou HA_WEBHOOK_URL).
 Aucune donnée de santé n'est écrite dans les journaux (seulement des longueurs et des états).
 """
 
@@ -27,9 +32,9 @@ import urllib.request
 ENV_FILE = os.environ.get("PARRO_ENV_FILE", "/etc/parro-sante/rapport.env")
 
 SYSTEM = (
-    "Tu rédiges le bilan santé du matin de Parro, en français. "
-    "Adresse-toi DIRECTEMENT à Parro, à la deuxième personne (« tu », « ton », « ta », « tes ») ; "
-    "n'écris jamais « Parro a » ni de pronom à la troisième personne pour le désigner. "
+    "Tu rédiges le bilan santé du matin destiné à {name}, en français. "
+    "Adresse-toi DIRECTEMENT à {name}, à la deuxième personne (« tu », « ton », « ta », « tes ») ; "
+    "n'écris jamais « {name} a » ni de pronom à la troisième personne pour le désigner. "
     "Évite tout accord au masculin ou au féminin qui te désignerait (préfère « ton activité a été plus faible » à « tu as été moins actif »). "
     "3 à 5 phrases courtes, ton factuel et bienveillant, sans titre, sans liste, sans emoji. "
     "Utilise UNIQUEMENT les valeurs fournies, recopiées telles quelles : ne calcule rien, ne compare que ce "
@@ -41,9 +46,9 @@ SYSTEM = (
 
 
 SYSTEM_WEEK = (
-    "Tu rédiges le bilan santé de la semaine de Parro, en français. "
-    "Adresse-toi DIRECTEMENT à Parro, à la deuxième personne (« tu », « ton », « ta », « tes ») ; "
-    "n'écris jamais « Parro a » ni de pronom à la troisième personne pour le désigner. "
+    "Tu rédiges le bilan santé de la semaine destiné à {name}, en français. "
+    "Adresse-toi DIRECTEMENT à {name}, à la deuxième personne (« tu », « ton », « ta », « tes ») ; "
+    "n'écris jamais « {name} a » ni de pronom à la troisième personne pour le désigner. "
     "Évite tout accord au masculin ou au féminin qui te désignerait (préfère « ton activité a été plus faible » à « tu as été moins actif »). "
     "4 à 6 phrases, ton factuel et bienveillant, sans titre, sans liste, sans emoji. "
     "Utilise UNIQUEMENT les valeurs fournies, recopiées telles quelles : ne calcule rien, compare seulement "
@@ -67,7 +72,7 @@ def load_env() -> dict[str, str]:
 def http(method: str, url: str, body: dict | None = None, headers: dict | None = None, timeout: int = 30) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
-        "Content-Type": "application/json", "User-Agent": "ParroHealth-rapport/1.0 (machine Ollama)", **(headers or {})})
+        "Content-Type": "application/json", "User-Agent": "ParroHealth-rapport/1.0", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
     return json.loads(raw) if raw else {}
@@ -145,11 +150,13 @@ def with_flags(text: str, flags: list) -> str:
 
 
 def write_with_model(env: dict, facts: dict, system: str = SYSTEM) -> str | None:
+    name = env.get("OWNER_NAME", "").strip() or "la personne concernée"
+    system = system.replace("{name}", name)
     body = {
         "model": env.get("MODEL", "mistral-nemo:12b"),
         "stream": False,
         "think": False,
-        "keep_alive": "2m",  # libère vite la VRAM pour l'agent Assist de Home Assistant
+        "keep_alive": "2m",  # libère vite la mémoire du GPU pour les autres usages d'Ollama
         "options": {"temperature": 0.3, "num_ctx": 4096},
         "messages": [
             {"role": "system", "content": system},
@@ -163,7 +170,7 @@ def write_with_model(env: dict, facts: dict, system: str = SYSTEM) -> str | None
         return None
     text = (r.get("message") or {}).get("content", "").strip()
     # Garde-fous : texte vide, trop long, raisonnement verbalisé, balises → texte de secours.
-    if not text or len(text) > 1500 or "<think" in text or text.count("\n- ") > 2 or "Parro a " in text:
+    if not text or len(text) > 1500 or "<think" in text or text.count("\n- ") > 2 or f"{name} a " in text:
         print(f"texte du modèle rejeté ({len(text)} car.)", file=sys.stderr)
         return None
     return text
@@ -188,10 +195,14 @@ def weekly(env: dict, base: str, auth: dict) -> None:
 
 
 def notify(env: dict, title: str, message: str) -> None:
-    """Alerte par Home Assistant — SANS donnée de santé (25/11/2026) : seulement l'alerte « plus de synchro »
-    et le rappel d'export, qui doivent justement arriver quand l'appli ne synchronise plus. Les rapports,
-    eux, sont annoncés par l'appli (notification locale : ni HA, ni Google)."""
-    http("POST", env["HA_WEBHOOK_URL"], {"title": title, "message": message})
+    """Alerte SANS donnée de santé : « plus de synchro » et rappel d'export, qui doivent justement arriver
+    quand l'appli ne synchronise plus. Webhook facultatif (Home Assistant ou tout service qui accepte
+    {"title", "message"}) ; sans lui, l'alerte n'est qu'écrite dans le journal du service."""
+    url = env.get("ALERT_WEBHOOK_URL") or env.get("HA_WEBHOOK_URL")
+    if not url:
+        print(f"alerte (aucun webhook configuré) : {title}")
+        return
+    http("POST", url, {"title": title, "message": message})
 
 
 def watch(env: dict) -> int:

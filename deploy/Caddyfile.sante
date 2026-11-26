@@ -27,6 +27,21 @@ sante.example.org {
 		reverse_proxy unix//run/sante/shc.sock
 	}
 
+	# Job de rapport et Home Assistant (FACULTATIFS) : jetons dédiés ET seulement depuis tes réseaux.
+	# ⚠️ Remplacer la plage d'exemple par l'adresse d'où partent le job et Home Assistant (VPN, IP fixe…).
+	# Ces blocs passent AVANT @app : sans eux, /api/v1/* les ouvrirait à tout Internet.
+	@interne {
+		path /api/v1/report-job/* /api/v1/ha/*
+		remote_ip 192.0.2.0/24
+	}
+	handle @interne {
+		reverse_proxy unix//run/sante/shc.sock
+	}
+	@interne_refuse path /api/v1/report-job/* /api/v1/ha/*
+	handle @interne_refuse {
+		respond 404
+	}
+
 	# App Android Parro Health, de n'importe où (5G comprise) : échange et révocation de jetons OAuth
 	# (PKCE, codes à usage unique) et API de lecture (jeton OAuth exigé). Les /token de Claude passent ici.
 	@app path /token /revoke /api/v1/*

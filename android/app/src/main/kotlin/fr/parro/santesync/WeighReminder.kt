@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Rappel de pesée (25/11/2026) : chaque jour ou un jour par semaine, à l'heure choisie dans les Réglages.
- * Ne sonne PAS si une pesée existe déjà aujourd'hui dans Health Connect (balance Aria via Google Health,
+ * Ne sonne PAS si une pesée existe déjà aujourd'hui dans Health Connect (balance connectée via Google Health,
  * Samsung Health…). Lu localement : aucune requête au serveur. Le texte ne contient aucune donnée de santé.
  * Travail unique qui se replanifie lui-même (même principe que MorningWorker).
  */

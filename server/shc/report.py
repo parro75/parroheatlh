@@ -1,6 +1,6 @@
 """Bilan quotidien : faits et signaux CALCULÉS ici (règles testables), jamais par le modèle de langage.
 
-Le modèle local (machine Ollama) ne fait que rédiger le texte à partir de ces faits — règle de la maison :
+Le modèle local (Ollama) ne fait que rédiger le texte à partir de ces faits — règle de la maison :
 « l'IA décrit et résume, les règles décident ».
 """
 

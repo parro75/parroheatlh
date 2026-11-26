@@ -1,5 +1,5 @@
 """Surveillance de l'âge de la dernière synchro du téléphone (règle de la maison : surveiller l'âge
-des données, pas les codes de retour). Les seuils vivent ici, testables ; le job de la machine Ollama ne fait
+des données, pas les codes de retour). Les seuils vivent ici, testables ; le job de rapport ne fait
 qu'interroger et relayer la notification."""
 
 from __future__ import annotations

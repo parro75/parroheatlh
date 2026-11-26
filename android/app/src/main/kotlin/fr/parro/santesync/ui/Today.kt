@@ -212,7 +212,7 @@ private fun RingLegend(label: String, color: Color, value: String, sub: String) 
     }
 }
 
-/** Rapport du jour : texte rédigé par l'IA locale (machine Ollama), signaux calculés par règles sur le serveur. */
+/** Rapport du jour : texte rédigé par l'IA locale (Ollama), signaux calculés par règles sur le serveur. */
 @Composable
 fun ReportCard(report: JSONObject) {
     val flags = report.optJSONObject("facts")?.optJSONArray("flags")?.objects().orEmpty()

@@ -2,7 +2,7 @@
 Description=Parro Health — vérifie toutes les 10 min (4 h-13 h) si le rapport du jour peut partir
 
 [Timer]
-# Heure de Montréal explicite : la machine Ollama est réglée en UTC.
+# Heure de Montréal explicite : la machine peut être réglée en UTC.
 OnCalendar=*-*-* 04..12:00/10:00 America/Toronto
 OnCalendar=*-*-* 13:00:00 America/Toronto
 Persistent=false

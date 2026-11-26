@@ -24,7 +24,7 @@ class Settings:
     allowed_origins: list[str] = field(default_factory=list)
     app_client_id: str = "parro-health-android"
     app_redirect_uri: str = "fr.parro.health://oauth/callback"
-    report_token: str = ""  # job de rédaction (machine Ollama) : lit le bilan du jour, dépose le texte ; rien d'autre
+    report_token: str = ""  # job de rédaction (Ollama) : lit le bilan du jour, dépose le texte ; rien d'autre
     ha_token: str = ""  # Home Assistant : lit /api/v1/ha/summary et RIEN d'autre (tableau de bord)
     report_deadline_hour: int = 12  # sans nuit reçue à cette heure, le rapport part quand même
 

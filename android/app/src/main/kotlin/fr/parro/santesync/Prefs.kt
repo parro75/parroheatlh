@@ -5,16 +5,30 @@ import androidx.core.content.edit
 import java.time.Instant
 
 /** Réglages et état de synchro, dans le stockage privé de l'appli (sauvegarde et transfert exclus). */
-class Prefs(context: Context) {
+class Prefs(private val context: Context) {
     private val sp = context.getSharedPreferences("santesync", Context.MODE_PRIVATE)
 
+    /** URL du serveur, HTTPS uniquement : une URL en clair n'est jamais utilisée, même si elle était stockée. */
     var serverUrl: String
-        get() = sp.getString("server_url", "") ?: ""
+        get() = (sp.getString("server_url", "") ?: "").takeIf { it.startsWith("https://") } ?: ""
         set(v) = sp.edit { putString("server_url", v.trim().trimEnd('/')) }
 
+    /** Jeton d'ingestion, chiffré par le Keystore (TokenStore). Migration : l'ancien jeton en clair est
+     *  chiffré à la première lecture puis effacé des préférences. */
     var token: String
-        get() = sp.getString("token", "") ?: ""
-        set(v) = sp.edit { putString("token", v.trim()) }
+        get() {
+            val store = TokenStore(context)
+            sp.getString("token", null)?.takeIf { it.isNotEmpty() }?.let { plain ->
+                store.ingestToken = plain
+                sp.edit { remove("token") }
+                return plain
+            }
+            return store.ingestToken ?: ""
+        }
+        set(v) {
+            TokenStore(context).ingestToken = v.trim()
+            sp.edit { remove("token") }
+        }
 
     /** Instant de début de la dernière synchro réussie (sert de borne à la suivante). */
     var lastSync: Instant?
