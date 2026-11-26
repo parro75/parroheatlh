@@ -17,7 +17,7 @@ IMG=${SANTE_IMG:-/var/lib/sante-chiffre.img}
 NOM=${SANTE_MAPPER:-sante}
 CIBLE=${SANTE_CIBLE:-/var/lib/sante}
 MARQUE=.volume-chiffre          # n'existe que DANS le volume (le service refuse de démarrer sans lui)
-CONTENEUR=${SANTE_CONTENEUR:-shc}
+CONTENEUR=${SANTE_CONTENEUR-shc}   # vide = ne redémarre aucun conteneur (essais)
 
 action=${SSH_ORIGINAL_COMMAND:-${1:-etat}}
 
@@ -46,8 +46,8 @@ ouvrir)
         echo "marqueur absent : ce n'est pas le volume attendu, démonté" >&2
         exit 1
     fi
-    docker restart "$CONTENEUR" >/dev/null
-    logger -t sante-volume "volume ouvert, conteneur $CONTENEUR redémarré"
+    if [ -n "$CONTENEUR" ]; then docker restart "$CONTENEUR" >/dev/null; fi
+    logger -t sante-volume "volume ouvert${CONTENEUR:+, conteneur $CONTENEUR redémarré}"
     echo ouvert
     ;;
 *)

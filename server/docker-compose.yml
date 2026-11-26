@@ -3,7 +3,7 @@
 services:
   shc:
     build: .
-    image: shc:0.11.1
+    image: shc:0.11.2
     container_name: shc
     restart: unless-stopped
     user: "10001:10001"
@@ -17,10 +17,10 @@ services:
       UNIX_SOCKET: /run/shc/shc.sock
       # Volume chiffré (deploy/volume-chiffre/) : sans ce fichier dans /data, refus de démarrer
       # (sinon, volume verrouillé = base vide créée EN CLAIR dans le dossier de montage).
-      # DATA_MARKER: .volume-chiffre
+      DATA_MARKER: .volume-chiffre   # retirer cette ligne si la base n'est pas sur un volume chiffré
 
-    # Base SQLite HORS de /opt : elle n'entre pas dans la sauvegarde nocturne en clair
-    # (décision du 25/11/2026 — en cas de perte, réimport depuis le téléphone).
+    # Base SQLite HORS de /opt, dans un volume LUKS2 (deploy/volume-chiffre/) monté sur /var/lib/sante ;
+    # clé jamais sur ce serveur. Volume fermé : dossier immuable + DATA_MARKER absent → refus de démarrer.
     volumes:
       - /var/lib/sante:/data
       - /var/lib/sante-run:/run/shc
