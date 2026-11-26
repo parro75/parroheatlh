@@ -13,6 +13,7 @@ GitHub) sur ce dépôt. Réponse sous quelques jours.
 | Menace | Protection |
 |---|---|
 | Écoute du réseau | HTTPS partout ; service sans réseau, joint par socket Unix ; trafic en clair interdit dans l'app |
+| Écriture avec un jeton volé | chaque écriture est **signée** par une clé ECDSA P-256 du Keystore matériel du téléphone appairé (appairage par l'app seulement, après mot de passe + TOTP) ; horodatage ± 5 min, anti-rejeu ; le jeton seul est refusé |
 | Accès non autorisé à l'API | 4 jetons distincts (écriture, lecture OAuth, job, Home Assistant), comparés en temps constant ; OAuth 2.1 + PKCE, mot de passe (scrypt) + TOTP anti-rejeu, verrouillage après 5 échecs ; jetons stockés hachés, rotation et révocation de famille sur rejeu |
 | Exposition des routes | proxy qui n'ouvre que les routes listées ; MCP limité aux IP d'Anthropic ; routes du job et de Home Assistant sur un nom interne seulement |
 | Vol ou recyclage du disque du serveur | base dans un volume LUKS2 dont la clé n'est jamais sur le serveur (`deploy/volume-chiffre/`) ; refus de démarrer si le volume n'est pas monté ; aucun swap pour le service |
@@ -30,10 +31,21 @@ GitHub) sur ce dépôt. Réponse sous quelques jours.
   ne l'empêche tant que le service doit lire les données.
 - Le verrouillage de la page de connexion est global : un tiers peut bloquer les **nouvelles** connexions
   pendant 15 min (sans pouvoir entrer, et sans couper l'app ni Claude déjà connectés).
-- Le jeton d'écriture permet d'ajouter et de supprimer des mesures : sa fuite compromettrait l'intégrité
-  (pas la confidentialité) ; les sauvegardes quotidiennes permettent de revenir en arrière.
+- Un téléphone appairé ET déverrouillé par un tiers peut écrire : révoquer l'appareil
+  (`python -m shc.admin revoke-device`) en cas de perte ou de vol.
 - Pas d'épinglage de certificat dans l'app (TLS standard ; Android n'accepte pas les autorités ajoutées par
   l'utilisateur).
+
+## Derniers contrôles
+
+**26/11/2026 — test d'intrusion** (depuis Internet, sans test de charge ni tentative de connexion sur
+`/login`) : TLS 1.2/1.3 seuls (1.0/1.1 et chiffrements CBC/SHA1 refusés), HSTS ; 34 sondes HTTP (fichiers
+sensibles, documentation d'API, traversées de chemin encodées, casse, méthodes, CORS, en-tête Host forgé,
+redirections OAuth malveillantes, corps de 22 Mo, routes internes) → toutes refusées comme prévu ; clé SSH
+de déverrouillage limitée à `etat|ouvrir` (ni shell, ni redirection, ni injection) ; APK publié : non
+débogable, sans sauvegarde, sans trafic en clair, aucune adresse ni secret dans le code. **Corrigé** : le
+filtre réseau du nom interne était ignoré (un `respond` de Caddy passe après les blocs `handle`) ; un
+jeton OAuth d'un autre client que l'app pouvait appairer un appareil.
 
 ## Dépendances
 
