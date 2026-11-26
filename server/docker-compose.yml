@@ -15,6 +15,9 @@ services:
     network_mode: none
     environment:
       UNIX_SOCKET: /run/shc/shc.sock
+      # Volume chiffré (deploy/volume-chiffre/) : sans ce fichier dans /data, refus de démarrer
+      # (sinon, volume verrouillé = base vide créée EN CLAIR dans le dossier de montage).
+      # DATA_MARKER: .volume-chiffre
 
     # Base SQLite HORS de /opt : elle n'entre pas dans la sauvegarde nocturne en clair
     # (décision du 25/11/2026 — en cas de perte, réimport depuis le téléphone).
@@ -28,5 +31,6 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777
     mem_limit: 512m   # l'import d'un export envoyé par le téléphone tourne dans le service (~125 Mo)
+    memswap_limit: 512m   # = mem_limit : AUCUN swap (le swap de l'hôte n'est pas chiffré)
     cpus: 0.5
     pids_limit: 64

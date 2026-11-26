@@ -218,12 +218,19 @@ SHA-256 `40:09:F2:CB:…:25:5B`.
 |---|---|---|
 | Téléphone | Health Connect (géré par Android) ; journal non encore envoyé, résumé du widget, réglages | stockage privé de l'app, **exclu** des sauvegardes cloud et des transferts d'appareil ; jetons (OAuth et ingestion) **chiffrés** par une clé AES du Keystore ; verrouillage biométrique facultatif, qui masque aussi le widget, le texte des notifications et la miniature des applis récentes |
 | Réseau | toutes les requêtes | HTTPS obligatoire (URL en clair refusée, trafic en clair interdit par le manifeste) |
-| Serveur | base SQLite | volume privé du conteneur (mode 700) ; à sauvegarder **chiffrée** (par exemple avec `age`) |
+| Serveur | base SQLite | volume privé du conteneur (mode 700), **chiffré au repos** en option (ci-dessous) ; aucun swap pour le conteneur ; à sauvegarder **chiffrée** (par exemple avec `age`) |
 | Serveur | export Samsung reçu | écrit le temps de l'import (mode 600), puis écrasé et supprimé |
 | Serveur | fiche PDF | générée en mémoire, jamais écrite |
 | Claude | réponses des outils MCP | ce que Claude lit pour répondre, selon ta configuration de Claude |
 | Machine Ollama | faits du jour (dont le journal) | ne quittent pas cette machine ; aucune donnée de santé dans ses journaux |
 | Home Assistant | chiffres du jour | facultatif ; penser à exclure ces capteurs de l'historique et d'Assist |
+
+**Chiffrement au repos (facultatif, `deploy/volume-chiffre/`).** La base vit dans un volume LUKS2 (un
+fichier monté sur `/var/lib/sante`) dont la clé n'est **jamais** sur le serveur : une machine de confiance
+chez toi l'envoie par SSH quand le volume est verrouillé (après un redémarrage), avec une clé SSH limitée par
+commande forcée à `sante-volume etat|ouvrir`. Disque emporté, remplacé, recyclé ou copié : illisible. Avec
+`DATA_MARKER`, le service refuse de démarrer tant que le volume n'est pas monté. Limite : cela ne protège pas
+d'un administrateur du serveur qui agit pendant que le volume est ouvert.
 
 Les tests n'utilisent que des valeurs fictives. Aucun secret n'est dans le dépôt : `.env`, bases et APK sont
 ignorés par git.

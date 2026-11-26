@@ -41,6 +41,14 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [v.strip() for v in os.environ.get(name, default).split(",") if v.strip()]
 
 
+def _require_data_volume(db_path: str) -> None:
+    """DATA_MARKER (facultatif) : nom d'un fichier qui n'existe QUE dans le volume chiffré. S'il manque, le
+    volume n'est pas monté : refuser de démarrer plutôt que de créer une base vide en clair en dessous."""
+    marker = os.environ.get("DATA_MARKER", "")
+    if marker and not os.path.exists(os.path.join(os.path.dirname(db_path), marker)):
+        raise SystemExit(f"volume de données non monté ({marker} absent) : démarrage refusé")
+
+
 def load() -> Settings:
     ingest = os.environ.get("INGEST_TOKEN", "")
     if len(ingest) < MIN_SECRET_LEN:
@@ -54,8 +62,10 @@ def load() -> Settings:
     totp = os.environ.get("TOTP_SECRET", "")
     if len(totp) < 16:
         raise SystemExit("TOTP_SECRET absent ou trop court : python -m shc.admin init")
+    db_path = os.environ.get("DB_PATH", "/data/health.db")
+    _require_data_volume(db_path)
     return Settings(
-        db_path=os.environ.get("DB_PATH", "/data/health.db"),
+        db_path=db_path,
         ingest_token=ingest,
         public_url=public,
         owner_password_hash=pw_hash,

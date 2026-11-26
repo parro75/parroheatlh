@@ -1,0 +1,57 @@
+#!/bin/bash
+# sante-volume — volume chiffré (LUKS2 dans un fichier) qui porte la base de Parro Health.
+#
+# La clé n'est JAMAIS stockée sur ce serveur : une machine de confiance (chez toi) l'envoie sur l'entrée
+# standard, par SSH, quand le volume est verrouillé (après un redémarrage). Disque emporté, remplacé,
+# recyclé ou copié = données illisibles. Ne protège pas d'un root qui agit pendant que le volume est ouvert.
+#
+#   sante-volume etat            → « ouvert » ou « verrouille »
+#   sante-volume ouvrir < clé    → ouvre, monte, vérifie le marqueur, redémarre le conteneur
+#
+# En commande forcée SSH (authorized_keys de root) :
+#   restrict,from="<IP de la machine de confiance>",command="/usr/local/sbin/sante-volume" ssh-ed25519 AAAA… sante-volume
+# La clé SSH ne peut alors RIEN faire d'autre que ces deux actions.
+set -euo pipefail
+
+IMG=${SANTE_IMG:-/var/lib/sante-chiffre.img}
+NOM=${SANTE_MAPPER:-sante}
+CIBLE=${SANTE_CIBLE:-/var/lib/sante}
+MARQUE=.volume-chiffre          # n'existe que DANS le volume (le service refuse de démarrer sans lui)
+CONTENEUR=${SANTE_CONTENEUR:-shc}
+
+action=${SSH_ORIGINAL_COMMAND:-${1:-etat}}
+
+ouvert() { mountpoint -q "$CIBLE" && [ -e "$CIBLE/$MARQUE" ]; }
+
+case "$action" in
+etat)
+    if ouvert; then echo ouvert; else echo verrouille; fi
+    ;;
+ouvrir)
+    if ouvert; then
+        cat >/dev/null
+        echo "déjà ouvert"
+        exit 0
+    fi
+    if [ ! -e "/dev/mapper/$NOM" ]; then
+        dev=$(losetup -j "$IMG" | cut -d: -f1 | head -1)
+        [ -n "$dev" ] || dev=$(losetup -f --show "$IMG")
+        cryptsetup open --type luks2 --key-file=- "$dev" "$NOM"
+    else
+        cat >/dev/null
+    fi
+    mount -o nodev,nosuid,noexec "/dev/mapper/$NOM" "$CIBLE"
+    if [ ! -e "$CIBLE/$MARQUE" ]; then
+        umount "$CIBLE"
+        echo "marqueur absent : ce n'est pas le volume attendu, démonté" >&2
+        exit 1
+    fi
+    docker restart "$CONTENEUR" >/dev/null
+    logger -t sante-volume "volume ouvert, conteneur $CONTENEUR redémarré"
+    echo ouvert
+    ;;
+*)
+    echo "action inconnue : etat | ouvrir" >&2
+    exit 2
+    ;;
+esac
