@@ -26,7 +26,7 @@ import java.time.format.DateTimeFormatter
 // ---- Journal des accès (26/11/2026) : qui a lu ou écrit quoi, quand, d'où ------------------------------
 
 private val SECURITY = setOf("appairage", "connexion", "connexion-echec", "connexion-verrouillee", "jeton-rejoue",
-    "client-enregistre", "ecriture-refusee", "jetons-emis", "jetons-revoques")
+    "client-enregistre", "ecriture-refusee", "jetons-emis", "jetons-revoques", "cle-ajoutee", "cle-supprimee")
 private val TIME = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 private fun who(actor: String): String = when {
@@ -48,6 +48,7 @@ private fun what(action: String): String {
         "connexion-verrouillee" to "Connexion bloquée", "jeton-rejoue" to "Jeton rejoué : session révoquée",
         "client-enregistre" to "Nouveau client OAuth", "ecriture-refusee" to "Écriture refusée",
         "jetons-emis" to "Jetons émis", "jetons-revoques" to "Déconnexion",
+        "cle-ajoutee" to "Clé d'accès ajoutée", "cle-supprimee" to "Clé d'accès retirée",
     )
     map[action]?.let { return it }
     if (action.startsWith("mcp ")) return "Lecture : " + action.removePrefix("mcp ").replace('_', ' ')
