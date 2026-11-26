@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -91,7 +90,6 @@ class MainActivity : FragmentActivity() {
 
     /** Verrouillage : l'interface est masquée tant que la biométrie n'a pas réussi. */
     private var locked by mutableStateOf(false)
-    private var backgroundedAt = 0L
 
     private fun authenticate(title: String, onResult: (Boolean) -> Unit) {
         val allowed = if (Build.VERSION.SDK_INT >= 30) BIOMETRIC_STRONG or DEVICE_CREDENTIAL else BIOMETRIC_WEAK or DEVICE_CREDENTIAL
@@ -119,12 +117,19 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /** Le téléphone a-t-il de quoi déverrouiller (biométrie ou code) ? Sinon on ne verrouille pas : pas d'enfermement. */
+    private fun canAuthenticate(): Boolean {
+        val allowed = if (Build.VERSION.SDK_INT >= 30) BIOMETRIC_STRONG or DEVICE_CREDENTIAL else BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+        return androidx.biometric.BiometricManager.from(this).canAuthenticate(allowed) == androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
+    }
+
     override fun onStart() {
         super.onStart()
         // Verrouillage actif : pas de miniature dans les applis récentes (les captures d'écran restent permises).
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!Prefs(this).lockEnabled)
-        val away = SystemClock.elapsedRealtime() - backgroundedAt
-        if (Prefs(this).lockEnabled && (backgroundedAt == 0L || away > 60_000)) {
+        // Sans délai de grâce (26/11/2026) : chaque retour au premier plan redemande la biométrie, sauf
+        // l'aller-retour que l'utilisateur vient de déclencher lui-même (LockGuard).
+        if (Prefs(this).lockEnabled && canAuthenticate() && !LockGuard.consume() && !locked) {
             locked = true
             unlock()
         }
@@ -132,7 +137,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
-        backgroundedAt = SystemClock.elapsedRealtime()
+        // L'écran qui s'éteint ou le passage à une autre appli : la miniature et l'interface seront masquées.
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,10 +163,12 @@ class MainActivity : FragmentActivity() {
         }
         val actions = SettingsActions(
             requestHealthPermissions = {
+                LockGuard.leaving()
                 requestPermissions.launch(HealthReader.wantedPermissions(HealthConnectClient.getOrCreate(this)))
             },
             requestBatteryExemption = ::requestBatteryExemption,
             openHealthConnectInstall = {
+                LockGuard.leaving()
                 startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=com.google.android.apps.healthdata".toUri()))
             },
             toast = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
@@ -169,6 +176,7 @@ class MainActivity : FragmentActivity() {
             confirmBiometric = { cb -> authenticate("Activer le verrouillage", cb) },
             pickExportZip = {
                 if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                LockGuard.leaving()
                 pickZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
             },
         )
@@ -231,7 +239,7 @@ class MainActivity : FragmentActivity() {
                                 Detail.ACTIVITY -> ActivityDetail(key, toLogin, close)
                                 Detail.BODY -> BodyDetail(key, toLogin, close)
                                 Detail.DIAGNOSTIC -> DiagnosticScreen(resumeTick,
-                                    onRequestExtra = { requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) }, onBack = close)
+                                    onRequestExtra = { LockGuard.leaving(); requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) }, onBack = close)
                                 null -> when (Tab.entries[t]) {
                                     Tab.TODAY -> TodayScreen(key, syncing, ::syncNow, toLogin) { dd, arg -> detailArg = arg; detail = dd }
                                     Tab.TRENDS -> TrendsScreen(key, toLogin)
@@ -254,6 +262,7 @@ class MainActivity : FragmentActivity() {
     /** Boîte de dialogue système « Ignorer les optimisations de batterie ? » pour cette seule appli. */
     @SuppressLint("BatteryLife")
     private fun requestBatteryExemption() {
+        LockGuard.leaving()
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
     }
 }

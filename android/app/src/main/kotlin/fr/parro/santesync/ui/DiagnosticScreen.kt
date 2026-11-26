@@ -38,6 +38,7 @@ fun DiagnosticScreen(tick: Int, onRequestExtra: () -> Unit, onBack: () -> Unit) 
         Loaded(state, onLogin = {}) { lines ->
             Section("Résultat") {
                 Button(onClick = {
+                    fr.parro.santesync.LockGuard.leaving()
                     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"; putExtra(Intent.EXTRA_TEXT, Diagnostic.asText(lines))
                     }, "Partager le diagnostic"))

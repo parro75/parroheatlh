@@ -96,7 +96,7 @@ class Prefs(private val context: Context) {
 
     /** Verrouillage biométrique à l'ouverture (option des Réglages). */
     var lockEnabled: Boolean
-        get() = sp.getBoolean("lock_enabled", false)
+        get() = sp.getBoolean("lock_enabled", true) // activé par défaut (26/11/2026)
         set(v) = sp.edit { putBoolean("lock_enabled", v) }
 
     val isConfigured: Boolean

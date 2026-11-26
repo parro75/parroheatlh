@@ -50,6 +50,7 @@ object OAuth {
         val url = "${prefs.serverUrl}/authorize?response_type=code&client_id=${enc(CLIENT_ID)}" +
             "&redirect_uri=${enc(REDIRECT_URI)}&code_challenge=$challenge&code_challenge_method=S256" +
             "&state=$state&scope=${enc(SCOPE)}"
+        LockGuard.leaving()
         CustomTabsIntent.Builder().build().launchUrl(context, url.toUri())
     }
 

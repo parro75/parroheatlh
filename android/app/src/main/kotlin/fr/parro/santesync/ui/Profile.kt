@@ -161,7 +161,7 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
             }
             Divider()
             var locked by remember { mutableStateOf(prefs.lockEnabled) }
-            ToggleRow("Verrouillage biométrique", "empreinte, visage ou code à l'ouverture (après 1 min en arrière-plan)", locked) { on ->
+            ToggleRow("Verrouillage biométrique", "empreinte, visage ou code à chaque retour dans l'app, sans délai", locked) { on ->
                 val refreshWidget = { scope.launch { ParroWidget.updateAll(ctx) } } // le widget masque ses données si verrouillé
                 if (!on) { prefs.lockEnabled = false; locked = false; refreshWidget() }
                 else actions.confirmBiometric { ok -> if (ok) { prefs.lockEnabled = true; locked = true; refreshWidget() } }

@@ -37,6 +37,7 @@ object MedicalPdf {
 
     /** Ouvre dans le lecteur PDF du téléphone (impression possible depuis celui-ci). Faux si aucun lecteur. */
     fun open(context: Context, file: File): Boolean = try {
+        LockGuard.leaving()
         context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri(context, file), "application/pdf")
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
         true
@@ -48,6 +49,7 @@ object MedicalPdf {
         val send = Intent(Intent.ACTION_SEND).setType("application/pdf")
             .putExtra(Intent.EXTRA_STREAM, uri(context, file))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        LockGuard.leaving()
         context.startActivity(Intent.createChooser(send, "Envoyer la fiche").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
