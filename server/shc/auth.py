@@ -313,7 +313,10 @@ td button{{width:auto;margin:0;padding:.3rem .6rem;font-size:.9rem}}</style></he
         return HTMLResponse(doc, status_code=status, headers={
             "Content-Security-Policy": self._csp(),
             "Cache-Control": "no-store",
-            "Referrer-Policy": "no-referrer",
+            # same-origin (et non no-referrer) : avec no-referrer, Firefox envoie « Origin: null » sur nos propres
+            # formulaires, ce qui faisait échouer le contrôle anti-falsification (constaté le 26/11/2026).
+            # Rien n'est envoyé aux autres sites (claude.ai, app).
+            "Referrer-Policy": "same-origin",
             "X-Frame-Options": "DENY",
             **(headers or {}),
         })
@@ -438,7 +441,13 @@ td button{{width:auto;margin:0;padding:.3rem .6rem;font-size:.9rem}}</style></he
     COOKIE = "shc_cles"
 
     def _same_origin(self, request: Request) -> bool:
-        return request.headers.get("origin", "") == self.public_url
+        """Anti-falsification (CSRF) : l'en-tête Origin de notre site, ou à défaut Sec-Fetch-Site: same-origin
+        (posé par le navigateur lui-même, impossible à forger depuis une page)."""
+        origin = request.headers.get("origin", "")
+        if origin:
+            return origin == self.public_url or (origin == "null" and
+                                                 request.headers.get("sec-fetch-site") == "same-origin")
+        return request.headers.get("sec-fetch-site") == "same-origin"
 
     def _keys_gate(self, error: str = "") -> HTMLResponse:
         gate = secrets.token_urlsafe(24)

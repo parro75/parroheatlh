@@ -132,6 +132,18 @@ def test_keys_page_requires_same_origin_and_session(client):
     assert r.status_code == 400  # pas d'en-tête Origin : refusé (CSRF)
 
 
+def test_firefox_origin_null_with_fetch_metadata(client):
+    """Firefox envoie « Origin: null » (ancienne politique no-referrer) : accepté si Sec-Fetch-Site = same-origin."""
+    page = client.get("/passkeys")
+    assert page.headers["referrer-policy"] == "same-origin"
+    gate = page.text.split('name="gate" value="')[1].split('"')[0]
+    data = {"gate": gate, "password": PASSWORD, "code": fresh_totp(client.app)}
+    assert client.post("/passkeys", data=data, headers={"Origin": "null", "Sec-Fetch-Site": "cross-site"}).status_code == 400
+    assert client.post("/passkeys", data=data, headers={"Origin": "https://evil.example"}).status_code == 400
+    r = client.post("/passkeys", data=data, headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"})
+    assert r.status_code == 303
+
+
 def test_passkey_only_policy(settings):
     with TestClient(create_app(dataclasses.replace(settings, second_factor="passkey")),
                     base_url="http://localhost", follow_redirects=False) as c:
