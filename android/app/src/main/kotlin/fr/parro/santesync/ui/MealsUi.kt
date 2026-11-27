@@ -36,7 +36,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import fr.parro.santesync.Api
+import fr.parro.santesync.LockGuard
+import fr.parro.santesync.MealPhoto
 import fr.parro.santesync.Meals
 import fr.parro.santesync.NotLoggedInException
 import kotlinx.coroutines.delay
@@ -69,6 +75,7 @@ fun MealsSection() {
     var burned by remember { mutableStateOf<Double?>(null) }
     var adding by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<Meals.Meal?>(null) }
+    var reviewing by remember { mutableStateOf<Pair<String, JSONObject>?>(null) }
     val today = LocalDate.now()
     LaunchedEffect(tick) {
         meals = Meals.list(ctx).filter { it.at.atZone(ZoneId.systemDefault()).toLocalDate() == today }
@@ -108,13 +115,21 @@ fun MealsSection() {
                 }
             }
         }
+        PendingPhotos(tick, onReview = { reviewing = it }, onChanged = { tick++ })
         PrimaryButton("Ajouter un repas", { adding = true }, color = c.body)
         Muted("Recettes : calories estimées d'après la table Ciqual (ANSES).", 11.sp)
     }
 
-    if (adding) AddMealDialog(onDismiss = { adding = false }) { slot, source, label, recipe, portions, values ->
+    if (adding) AddMealDialog(onDismiss = { adding = false }, onPhotoSent = { adding = false; tick++ }) { slot, source, label, recipe, portions, values ->
         adding = false
         scope.launch { Meals.add(ctx, Instant.now(), slot, source, label, recipe, portions, values); Meals.flush(ctx); tick++ }
+    }
+    reviewing?.let { (id, result) ->
+        PhotoReviewDialog(result, onDismiss = { reviewing = null }) { slot, label, values ->
+            reviewing = null
+            MealPhoto.forget(ctx, id)
+            scope.launch { Meals.add(ctx, Instant.now(), slot, "photo", label, null, null, values); Meals.flush(ctx); tick++ }
+        }
     }
     toDelete?.let { m ->
         AlertDialog(
@@ -145,6 +160,7 @@ private fun hits(o: JSONObject): List<RecipeHit> {
 @Composable
 private fun AddMealDialog(
     onDismiss: () -> Unit,
+    onPhotoSent: () -> Unit,
     onAdd: (slot: String, source: String, label: String, recipe: String?, portions: Double?, values: Map<String, Double>) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -160,6 +176,27 @@ private fun AddMealDialog(
     var kcalText by remember { mutableStateOf("") }
     val fieldColors = OutlinedTextFieldDefaults.colors(focusedBorderColor = c.body, unfocusedBorderColor = c.line,
         focusedContainerColor = c.inset, unfocusedContainerColor = c.inset)
+    val scope = rememberCoroutineScope()
+    var sending by remember { mutableStateOf(false) }
+    val send: (Uri?) -> Unit = { uri ->
+        if (uri != null) {
+            sending = true; error = null
+            scope.launch {
+                error = try {
+                    MealPhoto.upload(ctx, MealPhoto.prepare(ctx, uri)); null
+                } catch (e: Exception) {
+                    "Envoi impossible : ${e.message}"
+                } finally {
+                    MealPhoto.clearCamera(ctx)
+                }
+                sending = false
+                if (error == null) onPhotoSent()
+            }
+        }
+    }
+    val cameraUri = remember { MealPhoto.cameraUri(ctx) }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> send(if (ok) cameraUri else null) }
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> send(uri) }
 
     LaunchedEffect(query, mode) {
         if (mode != "recette") return@LaunchedEffect
@@ -176,15 +213,33 @@ private fun AddMealDialog(
     }
 
     val kcalFree = kcalText.replace(',', '.').toDoubleOrNull()
-    val canAdd = if (mode == "recette") chosen != null else (kcalFree != null && kcalFree in 0.0..10000.0)
+    val canAdd = when (mode) {
+        "recette" -> chosen != null
+        "saisie" -> kcalFree != null && kcalFree in 0.0..10000.0
+        else -> false
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Ajouter un repas") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Segmented(Meals.SLOTS, slot, { slot = it }, accent = c.bodySoft)
-                Segmented(listOf("recette" to "Recette", "saisie" to "Saisie libre"), mode, { mode = it }, accent = c.bodySoft)
-                if (mode == "recette") {
+                Segmented(listOf("recette" to "Recette", "photo" to "Photo", "saisie" to "Saisie libre"), mode, { mode = it },
+                    accent = c.bodySoft)
+                if (mode == "photo") {
+                    Muted("Pour un plat qui n'est PAS dans tes recettes (restaurant, plat improvisé…). L'IA locale identifie " +
+                        "le plat et sa recette type ; tu corriges avant de valider. La photo est effacée du serveur après " +
+                        "l'analyse, et n'en sort jamais.")
+                    if (sending) Muted("Envoi de la photo…", color = c.body)
+                    else {
+                        PrimaryButton("Prendre une photo", { LockGuard.leaving(); takePicture.launch(cameraUri) }, color = c.body)
+                        SecondaryButton("Choisir dans la galerie", {
+                            LockGuard.leaving()
+                            pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }, Modifier.fillMaxWidth())
+                    }
+                    error?.let { Muted(it, color = c.warn) }
+                } else if (mode == "recette") {
                     val pick = chosen
                     if (pick == null) {
                         OutlinedTextField(query, { query = it }, label = { Text("Chercher une recette") }, singleLine = true,
@@ -225,7 +280,7 @@ private fun AddMealDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = canAdd, onClick = {
+            if (mode != "photo") TextButton(enabled = canAdd, onClick = {
                 val pick = chosen
                 if (mode == "recette" && pick != null) {
                     onAdd(slot, "recette", pick.title, pick.id, portions, pick.perServing.mapValues { (_, x) -> x * portions })
@@ -237,4 +292,128 @@ private fun AddMealDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } },
         containerColor = c.surface,
     )
+}
+
+
+/** Analyses de photos en attente ou prêtes : le serveur les garde 24 h (sans la photo, effacée après analyse). */
+@Composable
+private fun PendingPhotos(tick: Int, onReview: (Pair<String, JSONObject>) -> Unit, onChanged: () -> Unit) {
+    val ctx = LocalContext.current
+    val c = P.c
+    var states by remember { mutableStateOf<Map<String, JSONObject?>>(emptyMap()) }
+    var poll by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tick, poll) {
+        val ids = MealPhoto.pending(ctx).map { it.first }
+        states = ids.associateWith { id ->
+            runCatching { MealPhoto.result(ctx, id) }.getOrElse { e ->
+                if (e is fr.parro.santesync.HttpStatusException && e.code == 404) { MealPhoto.forget(ctx, id); null }
+                else JSONObject().put("status", "pending")
+            }
+        }.filterValues { it != null }
+        if (states.values.any { it?.optString("status") in setOf("pending", "processing") }) {
+            delay(6_000); poll++ // l'analyse prend 1 à 2 min : on revient voir
+        }
+    }
+    states.forEach { (id, r) ->
+        val st = r?.optString("status") ?: return@forEach
+        Divider()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(when (st) {
+                    "done" -> r.optString("plat", "Repas") + " (photo)"
+                    "error" -> "Analyse de la photo impossible"
+                    else -> "Photo en cours d'analyse…"
+                }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                Muted(when (st) {
+                    "done" -> "≈ ${int(r.optJSONObject("total")?.optDouble("kcal") ?: 0.0)} kcal · à vérifier avant de valider"
+                    "error" -> r.optString("error")
+                    else -> "par l'IA locale, 1 à 2 min"
+                })
+            }
+            when (st) {
+                "done" -> TextButton(onClick = { onReview(id to r) }) { Text("Vérifier", color = c.body) }
+                "error" -> TextButton(onClick = { MealPhoto.forget(ctx, id); onChanged() }) { Text("Retirer") }
+                else -> {}
+            }
+        }
+    }
+}
+
+private data class PhotoLine(val name: String, val grams: Double, val food: String?, val per100: Map<String, Double>)
+
+/** Fiche de la photo analysée : nom, ingrédients (grammes modifiables), part mangée ; tout se corrige avant validation. */
+@Composable
+private fun PhotoReviewDialog(result: JSONObject, onDismiss: () -> Unit, onValidate: (slot: String, label: String, values: Map<String, Double>) -> Unit) {
+    val c = P.c
+    val initial = remember(result) {
+        val a = result.optJSONArray("ingredients")
+        (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) }.map { o ->
+            val p = o.optJSONObject("per100")
+            PhotoLine(o.optString("nom"), o.optDouble("grammes", 0.0), o.optString("aliment").takeIf { it.isNotEmpty() },
+                p?.keys()?.asSequence()?.associateWith { p.optDouble(it, 0.0) } ?: emptyMap())
+        }
+    }
+    var lines by remember { mutableStateOf(initial) }
+    var label by remember { mutableStateOf(result.optString("plat", "Repas")) }
+    var slot by remember { mutableStateOf(Meals.slotFor(LocalTime.now())) }
+    var share by remember { mutableStateOf("1") }
+    val factor = share.toDouble()
+    val values = Meals.NUTRIENTS.associateWith { k -> lines.sumOf { it.grams * (it.per100[k] ?: 0.0) / 100 } * factor }
+    val modelKcal = result.optDouble("model_kcal").takeIf { !it.isNaN() }
+    val kcal = values["kcal"] ?: 0.0
+    val diverges = modelKcal != null && kcal > 0 && (kcal / modelKcal > 2 || modelKcal / kcal > 2)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Vérifier le repas") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(label, { label = it.take(120) }, label = { Text("Plat") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = c.body, unfocusedBorderColor = c.line,
+                        focusedContainerColor = c.inset, unfocusedContainerColor = c.inset))
+                result.optString("portion").takeIf { it.isNotEmpty() }?.let { Muted("Portion vue par l'IA : $it") }
+                Segmented(Meals.SLOTS, slot, { slot = it }, accent = c.bodySoft)
+                Muted("Part mangée de cette portion")
+                Segmented(listOf("0.25" to "¼", "0.5" to "½", "0.75" to "¾", "1" to "1", "1.5" to "1½", "2" to "2"), share,
+                    { share = it }, accent = c.bodySoft)
+                lines.forEachIndexed { i, l ->
+                    Divider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(l.name, fontSize = 13.sp, color = c.text)
+                            Muted(l.food?.let { "${int(l.grams * (l.per100["kcal"] ?: 0.0) / 100)} kcal · $it" }
+                                ?: "non reconnu dans la table : 0 kcal", 11.sp, color = if (l.food == null) c.warn else c.muted, maxLines = 1)
+                        }
+                        Stepper("${int(l.grams)} g", c.body,
+                            { lines = lines.toMutableList().also { it[i] = l.copy(grams = (l.grams - step(l.grams)).coerceAtLeast(0.0)) } },
+                            { lines = lines.toMutableList().also { it[i] = l.copy(grams = (l.grams + step(l.grams)).coerceAtMost(3000.0)) } },
+                            l.name)
+                        IconButton(onClick = { lines = lines.filterIndexed { j, _ -> j != i } }) {
+                            Icon(ParroIcons.trash, contentDescription = "Retirer ${l.name}", tint = c.faint, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+                Divider()
+                Num("${int(kcal)} kcal", 24.sp, c.body)
+                Muted(macros(values))
+                if (diverges) Muted("⚠ L'estimation directe de l'IA est de ${int(modelKcal!!)} kcal pour la portion : " +
+                    "vérifie les quantités (souvent un plat entier compté pour une part).", color = c.warn)
+                Muted("Calcul d'après la table Ciqual (ANSES) ; quantités estimées par l'IA locale.", 11.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = lines.isNotEmpty(), onClick = { onValidate(slot, label.ifBlank { "Repas" }, values) }) {
+                Text("Valider", color = c.body)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Plus tard") } },
+        containerColor = c.surface,
+    )
+}
+
+/** Pas des grammes : fin pour les petites quantités (huile, beurre), plus large pour les grosses. */
+private fun step(g: Double): Double = when {
+    g < 30 -> 5.0
+    g < 200 -> 10.0
+    else -> 25.0
 }

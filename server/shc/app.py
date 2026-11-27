@@ -25,7 +25,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, audit, config, devices, ha, nutrition, passkeys, pdf, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, audit, config, devices, ha, mealphoto, nutrition, passkeys, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -84,14 +84,17 @@ class AuditMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             st = scope.get("state") or {}
+            # File de photos vide (le job demande toutes les 20 s) : aucune donnée lue, rien à tracer.
+            idle = status["code"] == 204 and scope["path"] == "/api/v1/report-job/meal-photos/next"
             headers = {k.decode().lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
             ip = (headers.get("x-forwarded-for") or (scope.get("client") or ("",))[0] or "").split(",")[0].strip()
             path = re.sub(r"/ingest-export/[0-9a-f]{32}", "/ingest-export/{id}", scope["path"])
             q = {k: v for k, v in parse_qsl(scope.get("query_string", b"").decode("latin-1"))
                  if k in ("start", "end", "date", "metric", "period", "months", "limit", "q", "id")}
             detail = st.get("audit_detail") or " ".join(f"{k}={v}" for k, v in q.items())
-            await run_in_threadpool(self.log.record, st.get("actor", "inconnu"), f"{scope['method']} {path}",
-                                    detail, ip, status["code"])
+            if not idle:
+                await run_in_threadpool(self.log.record, st.get("actor", "inconnu"), f"{scope['method']} {path}",
+                                        detail, ip, status["code"])
 
 
 def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider,
@@ -284,6 +287,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     reports = report.ReportStore(settings.db_path)
     watch = syncwatch.SyncWatch(settings.db_path)
     book = nutrition.RecipeBook(settings.recipes_dir)  # calories des recettes (facultatif : RECIPES_DIR)
+    photos = mealphoto.MealPhotos(settings.db_path)  # photos de repas en attente d'analyse (volume chiffré)
 
     def run_import(path: str) -> dict[str, Any]:
         res = samsung_export.run(store, path)
@@ -371,6 +375,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             elif name == "recipes":
                 data = {"available": book.available, "source": nutrition.SOURCE,
                         "recipes": await run_in_threadpool(book.list, q.get("q", "")[:80]) if book.available else []}
+            elif name == "meal-photo":
+                if access.client_id != settings.app_client_id:
+                    raise HTTPException(status_code=403, detail="réservé à l'app")
+                found = await run_in_threadpool(photos.get, q.get("id", "")[:40])
+                if found is None:
+                    raise HTTPException(status_code=404, detail="analyse inconnue ou expirée (24 h)")
+                data = found
             elif name == "recipe":
                 found = await run_in_threadpool(book.get, q.get("id", "")) if book.available else None
                 if found is None:
@@ -527,6 +538,45 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="action battery_alert|battery_ok attendue")
         watch.ack_battery(action)
         return JSONResponse({"ack": action})
+
+    # ---- photos de repas : envoi signé par le téléphone, analyse par le job de la machine IA ----
+    @app.post("/api/v1/meal-photo")
+    async def meal_photo_upload(request: Request) -> JSONResponse:
+        if int(request.headers.get("content-length") or 0) > mealphoto.MAX_IMAGE:
+            raise HTTPException(status_code=413, detail="photo trop lourde (3 Mo au plus)")
+        body = await require_write(request)
+        try:
+            pid = await run_in_threadpool(photos.add, body)
+        except mealphoto.PhotoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        request.state.audit_detail = f"photo de repas reçue ({len(body) // 1024} Ko)"
+        return JSONResponse({"id": pid}, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/v1/report-job/meal-photos/next")
+    async def meal_photo_next(request: Request) -> Response:
+        require_report_token(request)
+        item = await run_in_threadpool(photos.next)
+        if item is None:
+            return Response(status_code=204)
+        request.state.audit_detail = f"photo {item['id'][:8]} confiée à l'analyse"
+        return JSONResponse(item, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/meal-photos/result")
+    async def meal_photo_result(request: Request) -> JSONResponse:
+        require_report_token(request)
+        body = await json_body(request)
+        pid = str(body.get("id", ""))[:40]
+        if body.get("error"):
+            await run_in_threadpool(photos.fail, pid, str(body["error"]))
+            return JSONResponse({"stored": "error"})
+        matcher = await run_in_threadpool(nutrition.book_matcher, book)
+        try:
+            await run_in_threadpool(photos.complete, pid, body.get("analysis"), matcher, str(body.get("model", "")))
+        except mealphoto.PhotoError as exc:
+            await run_in_threadpool(photos.fail, pid, str(exc))
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        request.state.audit_detail = f"analyse de la photo {pid[:8]} rendue (photo effacée)"
+        return JSONResponse({"stored": "done"})
 
     @app.get("/api/v1/report-job/export-reminder")
     async def export_reminder(request: Request) -> JSONResponse:

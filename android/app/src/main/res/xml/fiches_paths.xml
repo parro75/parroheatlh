@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Seul le dossier de la fiche PDF est partageable (cache privé, une fiche à la fois). -->
+<!-- Dossiers partageables du cache privé : la fiche PDF, et la photo de repas le temps de la prise de vue. -->
 <paths>
     <cache-path name="fiches" path="fiches/" />
+    <!-- Photo de repas prise par l'appareil photo : effacée dès l'envoi au serveur. -->
+    <cache-path name="repas" path="repas/" />
 </paths>

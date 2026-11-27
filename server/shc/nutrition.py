@@ -34,7 +34,8 @@ MAX_DEPTH = 3
 
 def fold(s: str) -> str:
     """Minuscules sans accents ni espaces superflus (recherche et comparaison de noms)."""
-    s = unicodedata.normalize("NFKD", s.lower()).encode("ascii", "ignore").decode()
+    s = s.lower().replace("œ", "oe").replace("æ", "ae")  # ligatures : NFKD ne les décompose pas
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     return " ".join(s.split())
 
 
@@ -294,3 +295,58 @@ class RecipeBook:
         with self._lock:
             self._refresh()
             return [(k, r.title) for k, r in self._recipes.items()]
+
+
+# ---- rapprochement d'un nom d'aliment libre (photo analysée) avec la table Ciqual ------------------------
+
+_STOP = {"de", "du", "des", "la", "le", "les", "a", "au", "aux", "et", "en", "d", "l", "ou", "sans", "avec", "pour",
+         "type", "similaire", "frais", "fraiche", "fraiches", "maison", "fondu", "fondue", "rape", "rapee"}
+# Plats composés : écartés de la recherche approximative (un ingrédient n'est pas un plat préparé).
+_PREPARED = {"preemballe", "preemballee", "cuisine", "cuisinee", "salade", "flan", "tortilla", "choucroute",
+             "tartiflette", "sandwich", "pizza", "gateau", "patisserie", "plat", "garni", "garnie", "omelette",
+             "quiche", "tarte", "haricot", "farci", "farcie", "soupe", "veloute", "gratin", "biscuit", "bonbon"}
+
+
+def _sing(t: str) -> str:
+    return t[:-1] if len(t) > 3 and t[-1] in "sx" else t
+
+
+def _toks(s: str) -> set[str]:
+    return {_sing(t) for t in re.findall(r"[a-z]+", fold(s)) if t not in _STOP and len(t) > 1}
+
+
+class FoodMatcher:
+    """Nom libre (« lardons fumés », « beurre fondu ») → aliment Ciqual. D'abord la correspondance soignée des
+    recettes (config/nutrition.conf), puis une recherche approximative qui préfère les aliments simples et crus."""
+
+    def __init__(self, ciqual: dict[str, Food], mapping: dict[str, Mapping] | None = None):
+        self.ciqual = ciqual
+        self.curated = {}
+        for name, m in (mapping or {}).items():
+            if m.code in ciqual:
+                self.curated[" ".join(sorted(_toks(name)))] = m.code
+        self._index = [(f, _toks(f.name.split(",")[0]), _toks(f.name)) for f in ciqual.values() if f.per100["kcal"] is not None]
+
+    def match(self, name: str) -> Food | None:
+        q = _toks(name)
+        if not q:
+            return None
+        key = " ".join(sorted(q))
+        if key in self.curated:
+            return self.ciqual[self.curated[key]]
+        best, best_s = None, 0.0
+        for f, head, allt in self._index:
+            common = q & allt
+            if not common:
+                continue
+            s = (4 * len(q & head) + len(common) - 0.3 * len(head - q) - (3 if (allt & _PREPARED) - q else 0)
+                 + (1 if "cru" in allt or "moyen" in allt else 0))
+            if s > best_s:
+                best, best_s = f, s
+        return best if best_s >= 4 else None  # au moins le nom principal de l'aliment
+
+
+def book_matcher(book: "RecipeBook") -> FoodMatcher:
+    with book._lock:
+        book._refresh()
+        return FoodMatcher(book.ciqual, book._mapping)
