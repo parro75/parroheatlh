@@ -555,7 +555,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         except mealphoto.PhotoError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         # Le texte de la description n'est pas tracé : seulement sa présence.
-        request.state.audit_detail = (f"repas reçu : {len(images)} photo{'s' if len(images) > 1 else ''} "
+        request.state.audit_detail = ("repas reçu : description seule, sans photo" if not images else
+                                      f"repas reçu : {len(images)} photo{'s' if len(images) > 1 else ''} "
                                       f"({len(body) // 1024} Ko){', avec description' if desc else ''}")
         return JSONResponse({"id": pid}, headers={"Cache-Control": "no-store"})
 

@@ -20,8 +20,8 @@ android {
         applicationId = "fr.parro.santesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.21.0"
+        versionCode = 25
+        versionName = "0.22.0"
     }
 
     signingConfigs {

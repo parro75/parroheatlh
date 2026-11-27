@@ -24,6 +24,7 @@ MAX_IMAGE = 3 * 1024 * 1024
 MAX_PHOTOS = 4  # plusieurs angles ou plusieurs assiettes d'un même repas
 MAX_UPLOAD = 8 * 1024 * 1024  # envoi JSON : photos en base64 + description
 MAX_DESCRIPTION = 300
+MIN_TEXT_ONLY = 3  # repas décrit sans photo (saisie libre sans calories) : une description lisible au moins
 KEEP = timedelta(hours=24)
 LEASE = timedelta(minutes=10)  # analyse sans réponse au-delà : la photo repart dans la file
 MAX_TRIES = 2
@@ -112,13 +113,16 @@ class MealPhotos:
         self._lock = threading.Lock()
 
     def add(self, image: bytes | list[bytes], description: str = "") -> str:
+        """1 à 4 photos et une description facultative, ou une description seule (saisie libre sans calories)."""
         images = [image] if isinstance(image, bytes) else list(image)
-        if not 1 <= len(images) <= MAX_PHOTOS:
+        if len(images) > MAX_PHOTOS:
             raise PhotoError(f"de 1 à {MAX_PHOTOS} photos attendues")
         for img in images:
             if not isinstance(img, bytes) or not img.startswith(b"\xff\xd8") or len(img) > MAX_IMAGE:
                 raise PhotoError("photo JPEG de 3 Mo au plus attendue")
         desc = clean_description(description)
+        if not images and len(desc) < MIN_TEXT_ONLY:
+            raise PhotoError("décris le repas (plat, ingrédients, quantité) ou ajoute une photo")
         more = json.dumps([base64.b64encode(x).decode() for x in images[1:]]) if len(images) > 1 else None
         pid = uuid.uuid4().hex
         with self._lock:
@@ -127,7 +131,7 @@ class MealPhotos:
                 raise PhotoError("trop de photos en attente d'analyse")
             self._conn.execute(
                 "INSERT INTO meal_photos (id, created_at, status, image, more_images, description) VALUES (?, ?, 'pending', ?, ?, ?)",
-                (pid, _now().isoformat(), images[0], more, desc or None))
+                (pid, _now().isoformat(), images[0] if images else None, more, desc or None))
         return pid
 
     def next(self) -> dict[str, Any] | None:
@@ -148,14 +152,19 @@ class MealPhotos:
                 return None
             self._conn.execute("UPDATE meal_photos SET status='processing', leased_at=?, tries=tries+1 WHERE id=?",
                                (now.isoformat(), pid))
-        images = [base64.b64encode(image).decode()] + (json.loads(more) if more else [])
-        # image_b64 : pour un job resté en version précédente (une seule photo).
-        return {"id": pid, "images_b64": images, "image_b64": images[0], "description": desc or ""}
+        images = ([base64.b64encode(image).decode()] if image else []) + (json.loads(more) if more else [])
+        # image_b64 : pour un job resté en version précédente (une seule photo) ; absent pour un repas sans photo.
+        item = {"id": pid, "images_b64": images, "description": desc or ""}
+        if images:
+            item["image_b64"] = images[0]
+        return item
 
     def complete(self, pid: str, analysis: dict[str, Any], matcher: FoodMatcher, model: str) -> None:
         result = estimate(analysis, matcher)
         result["model"] = model[:60]
         with self._lock:
+            row = self._conn.execute("SELECT image IS NULL FROM meal_photos WHERE id=?", (pid,)).fetchone()
+            result["source"] = "texte" if row and row[0] else "photo"  # l'app enregistre « saisie » ou « photo »
             n = self._conn.execute(f"UPDATE meal_photos SET status='done', {_ERASE}, result=? WHERE id=? AND status='processing'",
                                    (json.dumps(result, ensure_ascii=False), pid)).rowcount
         if not n:
