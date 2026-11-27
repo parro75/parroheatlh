@@ -2,8 +2,10 @@ package fr.parro.santesync
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.util.Base64
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
@@ -16,11 +18,14 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Photo d'un repas HORS collection de recettes (restaurant, plat improvisé…) : réduite et réencodée sur le
- * téléphone (aucune métadonnée, ni lieu ni appareil), envoyée signée au serveur, analysée par l'IA locale,
- * puis effacée côté serveur. Ici, on ne garde que l'identifiant de l'analyse en attente (24 h au plus).
+ * Photos d'un repas HORS collection de recettes (restaurant, plat improvisé…) : 1 à 4 photos (angles, ou
+ * entrée/plat/dessert) et une description facultative. Réduites et réencodées sur le téléphone (aucune
+ * métadonnée, ni lieu ni appareil), envoyées signées au serveur, analysées par l'IA locale, puis effacées côté
+ * serveur avec la description. Ici, on ne garde que l'identifiant de l'analyse en attente (24 h au plus).
  */
 object MealPhoto {
+    const val MAX_PHOTOS = 4
+    const val MAX_DESCRIPTION = 300
     private const val MAX_SIDE = 1024
     private const val PREFS = "meal_photos"
 
@@ -51,8 +56,15 @@ object MealPhoto {
         }
     }
 
+    /** Vignette pour l'écran d'ajout (1/8 de la photo préparée, soit 128 px au plus). */
+    fun thumbnail(jpeg: ByteArray): Bitmap? =
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply { inSampleSize = 8 })
+
     /** Envoi signé (jeton d'écriture + clé matérielle du téléphone) ; renvoie l'identifiant de l'analyse. */
-    suspend fun upload(c: Context, jpeg: ByteArray): String = withContext(Dispatchers.IO) {
+    suspend fun upload(c: Context, jpegs: List<ByteArray>, description: String): String = withContext(Dispatchers.IO) {
+        val images = JSONArray().apply { jpegs.take(MAX_PHOTOS).forEach { put(Base64.encodeToString(it, Base64.NO_WRAP)) } }
+        val body = JSONObject().put("description", description.trim().take(MAX_DESCRIPTION)).put("images", images)
+            .toString().toByteArray(Charsets.UTF_8)
         val prefs = Prefs(c)
         DeviceKey.ensurePaired(c)
         val url = URL("${prefs.serverUrl}/api/v1/meal-photo")
@@ -64,11 +76,11 @@ object MealPhoto {
             conn.doOutput = true
             conn.instanceFollowRedirects = false
             conn.setRequestProperty("Authorization", "Bearer ${prefs.token}")
-            conn.setRequestProperty("Content-Type", "image/jpeg")
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("User-Agent", Sync.userAgent("photo"))
-            DeviceKey.headers("POST", url, jpeg).forEach { (k, v) -> conn.setRequestProperty(k, v) }
-            conn.setFixedLengthStreamingMode(jpeg.size)
-            conn.outputStream.use { it.write(jpeg) }
+            DeviceKey.headers("POST", url, body).forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            conn.setFixedLengthStreamingMode(body.size)
+            conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
             if (code !in 200..299) throw HttpStatusException(code, text)

@@ -19,14 +19,42 @@ from typing import Any
 from .nutrition import NUTRIENTS, FoodMatcher
 
 MAX_IMAGE = 3 * 1024 * 1024
+MAX_PHOTOS = 4  # plusieurs angles ou plusieurs assiettes d'un même repas
+MAX_UPLOAD = 8 * 1024 * 1024  # envoi JSON : photos en base64 + description
+MAX_DESCRIPTION = 300
 KEEP = timedelta(hours=24)
 LEASE = timedelta(minutes=10)  # analyse sans réponse au-delà : la photo repart dans la file
 MAX_TRIES = 2
 MAX_INGREDIENTS, MAX_GRAMS, MAX_NAME = 25, 3000, 60
 
 
+_ERASE = "image=NULL, more_images=NULL, description=NULL"  # tout ce que l'utilisateur a envoyé disparaît avec l'analyse
+
+
 class PhotoError(ValueError):
     pass
+
+
+def clean_description(text: Any) -> str:
+    """Description saisie : texte d'une ligne, sans caractères de contrôle, bornée."""
+    if not isinstance(text, str):
+        return ""
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())[:MAX_DESCRIPTION]
+
+
+def parse_upload(body: bytes, content_type: str) -> tuple[list[bytes], str]:
+    """Envoi de l'app : JPEG brut (une photo, app ≤ 0.19.0) ou JSON {description, images: [base64…]}."""
+    if not content_type.startswith("application/json"):
+        return [body], ""
+    try:
+        data = json.loads(body)
+        raw = data["images"]
+        if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+            raise ValueError
+        images = [base64.b64decode(x, validate=True) for x in raw[:MAX_PHOTOS + 1]]
+    except (ValueError, KeyError, TypeError):
+        raise PhotoError("envoi illisible : {description, images: [JPEG en base64]} attendu") from None
+    return images, clean_description(data.get("description"))
 
 
 def _now() -> datetime:
@@ -37,23 +65,36 @@ class MealPhotos:
     SCHEMA = """CREATE TABLE IF NOT EXISTS meal_photos (
         id TEXT PRIMARY KEY, created_at TEXT NOT NULL, status TEXT NOT NULL, image BLOB,
         leased_at TEXT, tries INTEGER NOT NULL DEFAULT 0, result TEXT, error TEXT)"""
+    # Ajoutées en 0.19.0 : photos supplémentaires (JSON de base64) et description saisie, effacées avec la photo.
+    COLUMNS = {"more_images": "TEXT", "description": "TEXT"}
 
     def __init__(self, path: str):
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute(self.SCHEMA)
+        have = {r[1] for r in self._conn.execute("PRAGMA table_info(meal_photos)")}
+        for col, typ in self.COLUMNS.items():
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE meal_photos ADD COLUMN {col} {typ}")
         self._lock = threading.Lock()
 
-    def add(self, image: bytes) -> str:
-        if not image.startswith(b"\xff\xd8") or len(image) > MAX_IMAGE:
-            raise PhotoError("photo JPEG de 3 Mo au plus attendue")
+    def add(self, image: bytes | list[bytes], description: str = "") -> str:
+        images = [image] if isinstance(image, bytes) else list(image)
+        if not 1 <= len(images) <= MAX_PHOTOS:
+            raise PhotoError(f"de 1 à {MAX_PHOTOS} photos attendues")
+        for img in images:
+            if not isinstance(img, bytes) or not img.startswith(b"\xff\xd8") or len(img) > MAX_IMAGE:
+                raise PhotoError("photo JPEG de 3 Mo au plus attendue")
+        desc = clean_description(description)
+        more = json.dumps([base64.b64encode(x).decode() for x in images[1:]]) if len(images) > 1 else None
         pid = uuid.uuid4().hex
         with self._lock:
             self._purge()
             if self._conn.execute("SELECT COUNT(*) FROM meal_photos WHERE status IN ('pending','processing')").fetchone()[0] >= 10:
                 raise PhotoError("trop de photos en attente d'analyse")
-            self._conn.execute("INSERT INTO meal_photos (id, created_at, status, image) VALUES (?, ?, 'pending', ?)",
-                               (pid, _now().isoformat(), image))
+            self._conn.execute(
+                "INSERT INTO meal_photos (id, created_at, status, image, more_images, description) VALUES (?, ?, 'pending', ?, ?, ?)",
+                (pid, _now().isoformat(), images[0], more, desc or None))
         return pid
 
     def next(self) -> dict[str, Any] | None:
@@ -62,32 +103,34 @@ class MealPhotos:
         with self._lock:
             self._purge()
             row = self._conn.execute(
-                """SELECT id, image, tries FROM meal_photos WHERE status = 'pending'
+                """SELECT id, image, more_images, description, tries FROM meal_photos WHERE status = 'pending'
                    OR (status = 'processing' AND leased_at < ?) ORDER BY created_at LIMIT 1""",
                 ((now - LEASE).isoformat(),)).fetchone()
             if row is None:
                 return None
-            pid, image, tries = row
+            pid, image, more, desc, tries = row
             if tries >= MAX_TRIES:
-                self._conn.execute("UPDATE meal_photos SET status='error', image=NULL, error=? WHERE id=?",
+                self._conn.execute(f"UPDATE meal_photos SET status='error', {_ERASE}, error=? WHERE id=?",
                                    ("analyse sans réponse", pid))
                 return None
             self._conn.execute("UPDATE meal_photos SET status='processing', leased_at=?, tries=tries+1 WHERE id=?",
                                (now.isoformat(), pid))
-        return {"id": pid, "image_b64": base64.b64encode(image).decode()}
+        images = [base64.b64encode(image).decode()] + (json.loads(more) if more else [])
+        # image_b64 : pour un job resté en version précédente (une seule photo).
+        return {"id": pid, "images_b64": images, "image_b64": images[0], "description": desc or ""}
 
     def complete(self, pid: str, analysis: dict[str, Any], matcher: FoodMatcher, model: str) -> None:
         result = estimate(analysis, matcher)
         result["model"] = model[:60]
         with self._lock:
-            n = self._conn.execute("UPDATE meal_photos SET status='done', image=NULL, result=? WHERE id=? AND status='processing'",
+            n = self._conn.execute(f"UPDATE meal_photos SET status='done', {_ERASE}, result=? WHERE id=? AND status='processing'",
                                    (json.dumps(result, ensure_ascii=False), pid)).rowcount
         if not n:
             raise PhotoError("photo inconnue ou pas en cours d'analyse")
 
     def fail(self, pid: str, error: str) -> None:
         with self._lock:
-            self._conn.execute("UPDATE meal_photos SET status='error', image=NULL, error=? WHERE id=?", (error[:200], pid))
+            self._conn.execute(f"UPDATE meal_photos SET status='error', {_ERASE}, error=? WHERE id=?", (error[:200], pid))
 
     def get(self, pid: str) -> dict[str, Any] | None:
         with self._lock:

@@ -1,5 +1,12 @@
 package fr.parro.santesync.ui
 
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -178,25 +185,47 @@ private fun AddMealDialog(
         focusedContainerColor = c.inset, unfocusedContainerColor = c.inset)
     val scope = rememberCoroutineScope()
     var sending by remember { mutableStateOf(false) }
-    val send: (Uri?) -> Unit = { uri ->
-        if (uri != null) {
-            sending = true; error = null
+    var preparing by remember { mutableIntStateOf(0) }
+    var shots by remember { mutableStateOf(emptyList<ByteArray>()) }
+    var description by remember { mutableStateOf("") }
+    val room = MealPhoto.MAX_PHOTOS - shots.size
+    // Chaque photo est préparée tout de suite (1024 px, sans métadonnées) : on n'en garde que le JPEG réduit.
+    val addShots: (List<Uri>) -> Unit = { uris ->
+        uris.take(room).forEach { uri ->
+            preparing++; error = null
             scope.launch {
-                error = try {
-                    MealPhoto.upload(ctx, MealPhoto.prepare(ctx, uri)); null
+                try {
+                    val jpeg = MealPhoto.prepare(ctx, uri)
+                    if (shots.size < MealPhoto.MAX_PHOTOS) shots = shots + jpeg
                 } catch (e: Exception) {
-                    "Envoi impossible : ${e.message}"
+                    error = "Photo illisible : ${e.message}"
                 } finally {
                     MealPhoto.clearCamera(ctx)
+                    preparing--
                 }
-                sending = false
-                if (error == null) onPhotoSent()
             }
+        }
+        if (uris.size > room) error = "${MealPhoto.MAX_PHOTOS} photos au plus par repas."
+    }
+    val sendPhotos: () -> Unit = {
+        sending = true; error = null
+        scope.launch {
+            error = try {
+                MealPhoto.upload(ctx, shots, description); null
+            } catch (e: Exception) {
+                "Envoi impossible : ${e.message}"
+            }
+            sending = false
+            if (error == null) onPhotoSent()
         }
     }
     val cameraUri = remember { MealPhoto.cameraUri(ctx) }
-    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> send(if (ok) cameraUri else null) }
-    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> send(uri) }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) addShots(listOf(cameraUri)) else MealPhoto.clearCamera(ctx)
+    }
+    val pickPictures = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MealPhoto.MAX_PHOTOS)) { uris ->
+        addShots(uris)
+    }
 
     LaunchedEffect(query, mode) {
         if (mode != "recette") return@LaunchedEffect
@@ -227,16 +256,47 @@ private fun AddMealDialog(
                 Segmented(listOf("recette" to "Recette", "photo" to "Photo", "saisie" to "Saisie libre"), mode, { mode = it },
                     accent = c.bodySoft)
                 if (mode == "photo") {
-                    Muted("Pour un plat qui n'est PAS dans tes recettes (restaurant, plat improvisé…). L'IA locale identifie " +
-                        "le plat et sa recette type ; tu corriges avant de valider. La photo est effacée du serveur après " +
-                        "l'analyse, et n'en sort jamais.")
-                    if (sending) Muted("Envoi de la photo…", color = c.body)
-                    else {
-                        PrimaryButton("Prendre une photo", { LockGuard.leaving(); takePicture.launch(cameraUri) }, color = c.body)
-                        SecondaryButton("Choisir dans la galerie", {
-                            LockGuard.leaving()
-                            pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        }, Modifier.fillMaxWidth())
+                    Muted("Pour un repas qui n'est PAS dans tes recettes (restaurant, plat improvisé…). L'IA locale identifie " +
+                        "le plat et sa recette type ; tu corriges avant de valider. Photos et description sont effacées du " +
+                        "serveur après l'analyse, et n'en sortent jamais.")
+                    OutlinedTextField(description, { description = it.take(MealPhoto.MAX_DESCRIPTION) },
+                        label = { Text("Description (facultatif)") },
+                        placeholder = { Text("ex. poké bowl saumon avocat, sauce soja ; j'ai laissé le riz") },
+                        minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                        colors = fieldColors)
+                    if (shots.isNotEmpty()) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            shots.forEachIndexed { i, jpeg ->
+                                val thumb = remember(jpeg) { MealPhoto.thumbnail(jpeg)?.asImageBitmap() }
+                                Box {
+                                    if (thumb != null) Image(thumb, contentDescription = "Photo ${i + 1}", contentScale = ContentScale.Crop,
+                                        modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)))
+                                    else Box(Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)).background(c.inset))
+                                    if (!sending) IconButton(onClick = { shots = shots.filterIndexed { j, _ -> j != i } },
+                                        modifier = Modifier.align(Alignment.TopEnd).size(28.dp)
+                                            .background(c.surface.copy(alpha = 0.8f), RoundedCornerShape(14.dp))) {
+                                        Icon(ParroIcons.trash, contentDescription = "Retirer la photo ${i + 1}", tint = c.text,
+                                            modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    when {
+                        sending -> Muted("Envoi ${if (shots.size > 1) "des ${shots.size} photos" else "de la photo"}…", color = c.body)
+                        preparing > 0 -> Muted("Préparation de la photo…", color = c.body)
+                        room > 0 -> {
+                            Muted(if (shots.isEmpty()) "Jusqu'à ${MealPhoto.MAX_PHOTOS} photos : plusieurs angles, ou entrée, plat et dessert."
+                                  else "Encore $room photo${if (room > 1) "s" else ""} possible${if (room > 1) "s" else ""} pour ce repas.", 12.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PrimaryButton(if (shots.isEmpty()) "Prendre une photo" else "Autre photo",
+                                    { LockGuard.leaving(); takePicture.launch(cameraUri) }, color = c.body, modifier = Modifier.weight(1f))
+                                SecondaryButton("Galerie", {
+                                    LockGuard.leaving()
+                                    pickPictures.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }, Modifier.weight(1f))
+                            }
+                        }
                     }
                     error?.let { Muted(it, color = c.warn) }
                 } else if (mode == "recette") {
@@ -280,7 +340,12 @@ private fun AddMealDialog(
             }
         },
         confirmButton = {
-            if (mode != "photo") TextButton(enabled = canAdd, onClick = {
+            if (mode == "photo") {
+                val ready = shots.isNotEmpty() && !sending && preparing == 0
+                TextButton(enabled = ready, onClick = sendPhotos) {
+                    Text(if (shots.size > 1) "Analyser les ${shots.size} photos" else "Analyser", color = if (ready) c.body else c.faint)
+                }
+            } else TextButton(enabled = canAdd, onClick = {
                 val pick = chosen
                 if (mode == "recette" && pick != null) {
                     onAdd(slot, "recette", pick.title, pick.id, portions, pick.perServing.mapValues { (_, x) -> x * portions })

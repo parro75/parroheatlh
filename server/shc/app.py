@@ -542,14 +542,19 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     # ---- photos de repas : envoi signé par le téléphone, analyse par le job de la machine IA ----
     @app.post("/api/v1/meal-photo")
     async def meal_photo_upload(request: Request) -> JSONResponse:
-        if int(request.headers.get("content-length") or 0) > mealphoto.MAX_IMAGE:
-            raise HTTPException(status_code=413, detail="photo trop lourde (3 Mo au plus)")
+        if int(request.headers.get("content-length") or 0) > mealphoto.MAX_UPLOAD:
+            raise HTTPException(status_code=413, detail="envoi trop lourd (8 Mo au plus)")
         body = await require_write(request)
+        if len(body) > mealphoto.MAX_UPLOAD:
+            raise HTTPException(status_code=413, detail="envoi trop lourd (8 Mo au plus)")
         try:
-            pid = await run_in_threadpool(photos.add, body)
+            images, desc = mealphoto.parse_upload(body, request.headers.get("content-type", ""))
+            pid = await run_in_threadpool(photos.add, images, desc)
         except mealphoto.PhotoError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        request.state.audit_detail = f"photo de repas reçue ({len(body) // 1024} Ko)"
+        # Le texte de la description n'est pas tracé : seulement sa présence.
+        request.state.audit_detail = (f"repas reçu : {len(images)} photo{'s' if len(images) > 1 else ''} "
+                                      f"({len(body) // 1024} Ko){', avec description' if desc else ''}")
         return JSONResponse({"id": pid}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/v1/report-job/meal-photos/next")

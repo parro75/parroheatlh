@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
 
 from conftest import AUTH, REPORT_TOKEN
 from test_app_api import app_login
 
-from shc.mealphoto import MealPhotos, estimate
+from shc.mealphoto import MealPhotos, PhotoError, clean_description, estimate, parse_upload
 from shc.nutrition import FoodMatcher, Mapping, load_ciqual
 
 JOB = {"Authorization": f"Bearer {REPORT_TOKEN}"}
@@ -84,3 +86,47 @@ def test_routes(client):
     client.get("/api/v1/report-job/meal-photos/next", headers=JOB)
     client.post("/api/v1/report-job/meal-photos/result", json={"id": pid2, "error": "modèle indisponible"}, headers=JOB)
     assert client.get("/api/v1/meal-photo", params={"id": pid2}, headers=h).json()["status"] == "error"
+
+
+def test_several_photos_and_description_erased(tmp_path):
+    q = MealPhotos(str(tmp_path / "p.db"))
+    other = b"\xff\xd8\xff\xe1" + b"1" * 500
+    pid = q.add([JPEG, other], "  Poké bowl\nsaumon, riz  \x07vinaigré ")
+    item = q.next()
+    assert [base64.b64decode(x) for x in item["images_b64"]] == [JPEG, other]
+    assert item["image_b64"] == item["images_b64"][0]  # job resté en version précédente
+    assert item["description"] == "Poké bowl saumon, riz vinaigré"  # une ligne, sans caractère de contrôle
+    q.complete(pid, {"plat": "Poké bowl", "ingredients": [{"nom": "Riz", "grammes": 150}]}, FoodMatcher(CIQ), "m")
+    row = sqlite3.connect(str(tmp_path / "p.db")).execute(
+        "SELECT image, more_images, description FROM meal_photos WHERE id=?", (pid,)).fetchone()
+    assert row == (None, None, None)  # photos ET description effacées avec l'analyse
+    for bad in ([], [JPEG] * 5, [JPEG, b"pas un jpeg"]):
+        try:
+            q.add(bad)
+            raise AssertionError(bad)
+        except PhotoError:
+            pass
+    assert len(clean_description("x" * 500)) == 300 and clean_description(42) == ""
+
+
+def test_parse_upload():
+    assert parse_upload(JPEG, "image/jpeg") == ([JPEG], "")
+    body = json.dumps({"description": "salade", "images": [base64.b64encode(JPEG).decode()]}).encode()
+    assert parse_upload(body, "application/json; charset=utf-8") == ([JPEG], "salade")
+    for bad in (b"{", b'{"images": "x"}', b'{"images": ["%%%"]}', b"{}"):
+        try:
+            parse_upload(bad, "application/json")
+            raise AssertionError(bad)
+        except PhotoError:
+            pass
+
+
+def test_route_json_upload(client):
+    b64 = base64.b64encode(JPEG).decode()
+    r = client.post("/api/v1/meal-photo", json={"description": "tacos al pastor", "images": [b64, b64]}, headers=AUTH)
+    pid = r.json()["id"]
+    item = client.get("/api/v1/report-job/meal-photos/next", headers=JOB).json()
+    assert item["id"] == pid and len(item["images_b64"]) == 2 and item["description"] == "tacos al pastor"
+    detail = [e for e in client.app.state.audit.entries(50) if "repas reçu" in str(e)]
+    assert detail and "2 photos" in str(detail[0]) and "tacos" not in str(detail[0])  # la description n'est pas tracée
+    assert client.post("/api/v1/meal-photo", json={"images": [b64] * 5}, headers=AUTH).status_code == 422
