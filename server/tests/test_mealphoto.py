@@ -165,3 +165,4 @@ def test_common_foods_for_photos(tmp_path):
     assert m.match("Tortillas de maïs").code == "7813"   # pas des chips de maïs (27/11)
     assert m.match("Pâtes").code == "9810"               # pas du pâté
     assert m.match("Tranches de fromage").code == "12300"
+    assert m.match("Fromage blanc").code != "12300" and m.match("Fromage frais").code != "12300"  # pas avalés
