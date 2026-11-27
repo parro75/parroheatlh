@@ -25,6 +25,11 @@ def test_matcher_prefers_simple_raw_foods():
     assert m.match("Pommes de terre").name.startswith("Pomme de terre")
     assert m.match("Reblochon").name == "Reblochon"
     assert m.match("xyzzy") is None
+    m2 = FoodMatcher(CIQ, {"sel": Mapping("0"), "crème fraîche": Mapping("19410"), "beurre": Mapping("16400")})
+    assert m2.match("Sel").per100["kcal"] == 0                  # « sans calories » : pas du sel au céleri
+    assert m2.match("Crème fraîche épaisse").code == "19410"     # qualificatif seul en plus
+    assert m2.match("Beurre fondu").code == "16400"
+    assert m2.match("Beurre de cacahuète").code != "16400"       # « cacahuète » n'est pas un qualificatif
 
 
 def test_estimate_bounds_and_coherence():

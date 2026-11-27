@@ -300,7 +300,12 @@ class RecipeBook:
 # ---- rapprochement d'un nom d'aliment libre (photo analysée) avec la table Ciqual ------------------------
 
 _STOP = {"de", "du", "des", "la", "le", "les", "a", "au", "aux", "et", "en", "d", "l", "ou", "sans", "avec", "pour",
-         "type", "similaire", "frais", "fraiche", "fraiches", "maison", "fondu", "fondue", "rape", "rapee"}
+         "type", "similaire", "maison", "fondu", "fondue"}
+# Qualificatifs qui ne changent pas l'aliment : « crème fraîche épaisse » retrouve « crème fraîche ».
+_DESCRIPTORS = {"fume", "epais", "epaisse", "entier", "entiere", "rape", "cru", "crue", "cuit", "cuite", "nature",
+                "doux", "douce", "demi", "hache", "emince", "coupe", "grosse", "gros", "petit", "petite", "moulu",
+                "frai", "fraiche", "blanc", "blanche", "fin", "fine", "pour", "garniture"}
+ZERO = Food("0", "sans calories notables", dict.fromkeys(NUTRIENTS, 0.0))
 # Plats composés : écartés de la recherche approximative (un ingrédient n'est pas un plat préparé).
 _PREPARED = {"preemballe", "preemballee", "cuisine", "cuisinee", "salade", "flan", "tortilla", "choucroute",
              "tartiflette", "sandwich", "pizza", "gateau", "patisserie", "plat", "garni", "garnie", "omelette",
@@ -321,19 +326,23 @@ class FoodMatcher:
 
     def __init__(self, ciqual: dict[str, Food], mapping: dict[str, Mapping] | None = None):
         self.ciqual = ciqual
-        self.curated = {}
+        self.curated: dict[frozenset[str], Food] = {}
         for name, m in (mapping or {}).items():
-            if m.code in ciqual:
-                self.curated[" ".join(sorted(_toks(name)))] = m.code
+            food = ZERO if m.code == "0" else ciqual.get(m.code)
+            if food is not None and _toks(name):
+                self.curated[frozenset(_toks(name))] = food
         self._index = [(f, _toks(f.name.split(",")[0]), _toks(f.name)) for f in ciqual.values() if f.per100["kcal"] is not None]
 
     def match(self, name: str) -> Food | None:
         q = _toks(name)
         if not q:
             return None
-        key = " ".join(sorted(q))
-        if key in self.curated:
-            return self.ciqual[self.curated[key]]
+        if frozenset(q) in self.curated:
+            return self.curated[frozenset(q)]
+        # entrée soignée contenue dans le nom, le reste n'étant que des qualificatifs (la plus précise d'abord)
+        subs = [(k, f) for k, f in self.curated.items() if k < q and not (q - k - _DESCRIPTORS)]
+        if subs:
+            return max(subs, key=lambda kf: len(kf[0]))[1]
         best, best_s = None, 0.0
         for f, head, allt in self._index:
             common = q & allt
