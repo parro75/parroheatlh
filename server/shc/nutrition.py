@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 CIQUAL_CSV = Path(__file__).parent / "data" / "ciqual2025.csv"
+COMMON_FOODS = Path(__file__).parent / "data" / "aliments_courants.conf"  # repas hors recettes (photos)
 NUTRIENTS = ("kcal", "proteines", "glucides", "lipides", "fibres", "sucres", "sel")
 SOURCE = "Table de composition nutritionnelle Ciqual 2025, ANSES (licence Etalab 2.0)"
 
@@ -356,6 +357,8 @@ class FoodMatcher:
 
 
 def book_matcher(book: "RecipeBook") -> FoodMatcher:
+    """Pour les photos : aliments courants du serveur, puis nutrition.conf des recettes, qui l'emporte."""
+    base = load_mapping(COMMON_FOODS)
     with book._lock:
         book._refresh()
-        return FoodMatcher(book.ciqual, book._mapping)
+        return FoodMatcher(book.ciqual, {**base, **book._mapping})
