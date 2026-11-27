@@ -80,16 +80,16 @@ fun MealsSection() {
     var tick by remember { mutableIntStateOf(0) }
     var meals by remember { mutableStateOf(emptyList<Meals.Meal>()) }
     var burned by remember { mutableStateOf<Double?>(null) }
+    var target by remember { mutableStateOf<Double?>(null) }
     var adding by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<Meals.Meal?>(null) }
     var reviewing by remember { mutableStateOf<Pair<String, JSONObject>?>(null) }
     val today = LocalDate.now()
     LaunchedEffect(tick) {
         meals = Meals.list(ctx).filter { it.at.atZone(ZoneId.systemDefault()).toLocalDate() == today }
-        burned = runCatching {
-            Api.get(ctx, "nutrition", mapOf("start" to today.toString(), "end" to today.toString()))
-                .optJSONArray("days")?.optJSONObject(0)?.optJSONObject("burned")?.optDouble("total_kcal")?.takeIf { !it.isNaN() }
-        }.getOrNull()
+        val n = runCatching { Api.get(ctx, "nutrition", mapOf("start" to today.toString(), "end" to today.toString())) }.getOrNull()
+        burned = n?.optJSONArray("days")?.optJSONObject(0)?.optJSONObject("burned")?.dbl("total_kcal")
+        target = n?.optJSONObject("weight_goal")?.dbl("kcal_target") // objectif de poids réglé dans Profil
     }
     val total = Meals.NUTRIENTS.associateWith { k -> meals.sumOf { it.values[k] ?: 0.0 } }
 
@@ -103,6 +103,13 @@ fun MealsSection() {
                 }
             }
             burned?.let { Muted("dépensé : ${int(it)} kcal\n(montre)", 12.sp) }
+        }
+        target?.let { t ->
+            val eaten = total["kcal"] ?: 0.0
+            val left = t - eaten
+            Muted(if (left >= 0) "Cible du jour : ${int(t)} kcal · reste ${int(left)}"
+                  else "Cible du jour : ${int(t)} kcal · dépassée de ${int(-left)}",
+                color = if (left >= 0) c.muted else c.warn)
         }
         if (meals.isNotEmpty()) Muted(macros(total))
         meals.sortedBy { it.at }.forEach { m ->

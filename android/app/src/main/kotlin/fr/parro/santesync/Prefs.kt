@@ -58,6 +58,23 @@ class Prefs(val context: Context) {
         get() = sp.getInt("goal_steps", 8000)
         set(v) = sp.edit { putInt("goal_steps", v); putBoolean("goals_pending", true) }
 
+    /** Objectif de poids : plage en kg (0 = aucun objectif), date visée et date du réglage (départ de la trajectoire). */
+    var weightLow: Int
+        get() = sp.getInt("goal_weight_low", 0)
+        set(v) = sp.edit { putInt("goal_weight_low", v); putBoolean("goals_pending", true) }
+
+    var weightHigh: Int
+        get() = sp.getInt("goal_weight_high", 0)
+        set(v) = sp.edit { putInt("goal_weight_high", v); putBoolean("goals_pending", true) }
+
+    var weightDate: String
+        get() = sp.getString("goal_weight_date", "") ?: ""
+        set(v) = sp.edit { putString("goal_weight_date", v); putBoolean("goals_pending", true) }
+
+    var weightSince: String
+        get() = sp.getString("goal_weight_since", "") ?: ""
+        set(v) = sp.edit { putString("goal_weight_since", v); putBoolean("goals_pending", true) }
+
     var goalsPending: Boolean
         get() = sp.getBoolean("goals_pending", false)
         set(v) = sp.edit { putBoolean("goals_pending", v) }

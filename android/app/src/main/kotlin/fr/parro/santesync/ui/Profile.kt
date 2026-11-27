@@ -14,6 +14,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import java.time.ZoneOffset
+import java.time.LocalDate
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -132,7 +141,28 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
                     stepsGoal = step(Goals.STEPS_OPTIONS, stepsGoal, -1); prefs.stepsGoal = stepsGoal; save()
                 }, { stepsGoal = step(Goals.STEPS_OPTIONS, stepsGoal, 1); prefs.stepsGoal = stepsGoal; save() }, "objectif de pas")
             }
-            Muted("Utilisés par les graphiques et par les règles des rapports.", 11.sp, Modifier.padding(top = 6.dp))
+            Divider()
+            var wLow by remember { mutableIntStateOf(prefs.weightLow) }
+            var wHigh by remember { mutableIntStateOf(prefs.weightHigh) }
+            var wDate by remember { mutableStateOf(prefs.weightDate) }
+            var editingWeight by remember { mutableStateOf(false) }
+            GoalRow("Poids", if (wLow > 0 && wDate.isNotEmpty()) "entre $wLow et $wHigh kg le ${dmy(wDate)}" else "aucun objectif") {
+                TextButton(onClick = { editingWeight = true }) {
+                    Text(if (wLow > 0) "Modifier" else "Définir", color = c.body)
+                }
+            }
+            if (editingWeight) WeightGoalDialog(wLow, wHigh, wDate, onDismiss = { editingWeight = false },
+                onRemove = {
+                    prefs.weightLow = 0; prefs.weightHigh = 0; prefs.weightDate = ""; prefs.weightSince = ""
+                    wLow = 0; wHigh = 0; wDate = ""; editingWeight = false; save()
+                }) { lo, hi, d ->
+                // départ de la trajectoire : le jour où l'objectif est créé (une modification le garde)
+                if (prefs.weightLow == 0 || prefs.weightSince.isEmpty()) prefs.weightSince = LocalDate.now().toString()
+                prefs.weightLow = lo; prefs.weightHigh = hi; prefs.weightDate = d
+                wLow = lo; wHigh = hi; wDate = d; editingWeight = false; save()
+            }
+            Muted("Utilisés par les graphiques et par les règles des rapports. Poids : trajectoire dans Corps et cible " +
+                "de calories du jour dans Repas.", 11.sp, Modifier.padding(top = 6.dp))
         }
 
         MedicalPdfCard(onLogin)
@@ -238,6 +268,67 @@ private fun StatusCell(label: String, value: String, dot: androidx.compose.ui.gr
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             dot?.let { Dot(it) }
             Text(value, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = P.c.text, maxLines = 1)
+        }
+    }
+}
+
+private fun dmy(iso: String): String =
+    runCatching { LocalDate.parse(iso).format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }.getOrDefault(iso)
+
+/** Objectif de poids : plage (kg) et date visée ; la trajectoire vise le milieu de la plage. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WeightGoalDialog(low: Int, high: Int, date: String, onDismiss: () -> Unit, onRemove: () -> Unit,
+                             onSave: (Int, Int, String) -> Unit) {
+    val c = P.c
+    var lo by remember { mutableIntStateOf(if (low > 0) low else 75) }
+    var hi by remember { mutableIntStateOf(if (high > 0) high else 85) }
+    var d by remember { mutableStateOf(date.ifEmpty { LocalDate.now().plusMonths(6).toString() }) }
+    var picking by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Objectif de poids") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GoalRow("Au moins", "bas de la plage") {
+                    Stepper("$lo kg", c.body, { lo = (lo - 1).coerceAtLeast(Goals.WEIGHT_MIN) },
+                        { lo = (lo + 1).coerceAtMost(hi) }, "bas de la plage")
+                }
+                GoalRow("Au plus", "haut de la plage") {
+                    Stepper("$hi kg", c.body, { hi = (hi - 1).coerceAtLeast(lo) },
+                        { hi = (hi + 1).coerceAtMost(Goals.WEIGHT_MAX) }, "haut de la plage")
+                }
+                GoalRow("Pour le", "date visée") {
+                    TextButton(onClick = { picking = true }) { Text(dmy(d), color = c.body) }
+                }
+                Muted("La trajectoire part de ta pesée du jour du réglage et vise le milieu de la plage " +
+                    "(${"%.1f".format((lo + hi) / 2.0).replace('.', ',').removeSuffix(",0")} kg).", 12.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(lo, hi, d) }) { Text("Enregistrer", color = c.body) } },
+        dismissButton = {
+            Row {
+                if (low > 0) TextButton(onClick = onRemove) { Text("Retirer", color = c.heart) }
+                TextButton(onClick = onDismiss) { Text("Annuler") }
+            }
+        },
+        containerColor = c.surface,
+    )
+    if (picking) {
+        val zone = ZoneOffset.UTC
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = LocalDate.parse(d).atStartOfDay(zone).toInstant().toEpochMilli(),
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) =
+                    Instant.ofEpochMilli(utcTimeMillis).atZone(zone).toLocalDate().isAfter(LocalDate.now())
+            })
+        DatePickerDialog(onDismissRequest = { picking = false }, confirmButton = {
+            TextButton(onClick = {
+                state.selectedDateMillis?.let { d = Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toString() }
+                picking = false
+            }) { Text("OK", color = c.body) }
+        }, dismissButton = { TextButton(onClick = { picking = false }) { Text("Annuler") } }) {
+            DatePicker(state)
         }
     }
 }

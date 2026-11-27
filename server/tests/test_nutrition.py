@@ -137,3 +137,51 @@ def test_nutrition_api(client):
     assert client.get("/api/v1/recipes", headers=h).json() == {"available": False, "source": nutrition.SOURCE,
                                                                "recipes": []}
     assert client.get("/api/v1/recipe", params={"id": "x"}, headers=h).status_code == 404
+
+
+def _rec(rtype, rid, day, data):
+    return {"type": rtype, "id": rid, "start": f"{day}T08:00:00-05:00", "end": f"{day}T08:00:00-05:00",
+            "zone_offset": "-05:00", "data": data}
+
+
+def test_weight_goal(client):
+    from datetime import date, timedelta
+    recs = [_rec("weight", "w1", "2026-11-26", {"kg": 102.0}), _rec("weight", "w2", "2027-01-26", {"kg": 98.0}),
+            _rec("goals", "goals", "2026-11-27", {"sleep_min": 450, "steps": 8000, "weight_low": 80, "weight_high": 90,
+                                                  "weight_date": "2027-09-26", "weight_since": "2026-11-27"})]
+    d0 = date(2027, 1, 13)
+    recs += [_rec("calories_daily", f"cal:{d0 + timedelta(days=i)}", (d0 + timedelta(days=i)).isoformat(),
+                  {"total_kcal": 2200}) for i in range(14)]
+    assert client.post("/ingest", json={"records": recs}, headers=AUTH).status_code == 200
+    h = {"Authorization": f"Bearer {app_login(client)['access_token']}"}
+    g = client.get("/api/v1/body", params={"start": "2026-11-01", "end": "2027-01-27"}, headers=h).json()["weight_goal"]
+    assert g["target_kg"] == 85 and g["start"] == {"date": "2026-11-26", "kg": 102.0}
+    # 61 j sur 304 : trajectoire attendue ≈ 102 - 17 × 61/304 ≈ 98,6 ; pesée 98 → en avance de 0,6 kg
+    assert g["expected_kg"] == 98.6 and g["gap_kg"] == -0.6 and g["status"] == "en avance"
+    assert g["to_go_kg"] == -13.0 and g["rate_kg_per_week"] == -0.38
+    assert g["burned_avg_kcal"] == 2200 and g["kcal_target"] == 1790  # 2200 − 13/34,6 sem × 7700 / 7 ≈ 1786
+    n = client.get("/api/v1/nutrition", params={"start": "2027-01-27", "end": "2027-01-27"}, headers=h).json()
+    assert n["weight_goal"]["kcal_target"] == 1790
+    # pas d'objectif de poids réglé : rien
+    assert client.post("/ingest", json={"records": [_rec("goals", "goals", "2027-01-27", {"sleep_min": 450, "steps": 8000})]},
+                       headers=AUTH).status_code == 200
+    assert "weight_goal" not in client.get("/api/v1/body", params={"start": "2027-01-01", "end": "2027-01-27"}, headers=h).json()
+
+
+def test_weight_goal_floor_and_bad_config():
+    from datetime import date
+    from shc.queries import FLOOR_KCAL, _weight_goal_config
+    assert FLOOR_KCAL == 1500
+
+    class S:
+        def __init__(self, data):
+            self.data = data
+
+        def fetch(self, *_):
+            return [type("R", (), {"data": self.data})()]
+    assert _weight_goal_config(S({"weight_low": 90, "weight_high": 80, "weight_date": "2027-09-26", "weight_since": "2026-11-27"})) is None
+    assert _weight_goal_config(S({"weight_low": 80, "weight_high": 90, "weight_date": "pas une date", "weight_since": "2026-11-27"})) is None
+    assert _weight_goal_config(S({"weight_low": 80, "weight_high": 90, "weight_date": "2026-01-01", "weight_since": "2026-11-27"})) is None
+    assert _weight_goal_config(S({"weight_low": True, "weight_high": 90, "weight_date": "2027-09-26", "weight_since": "2026-11-27"})) is None
+    assert date(2027, 9, 26).isoformat() == _weight_goal_config(
+        S({"weight_low": 80, "weight_high": 90, "weight_date": "2027-09-26", "weight_since": "2026-11-27"}))["date"]

@@ -165,8 +165,9 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
 
     @mcp.tool(annotations=READ_ONLY)
     def get_body_measurements(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
-        """Poids (kg) et masse grasse (%) : dernière mesure de chaque jour."""
-        return run(queries.body, start, end)
+        """Poids (kg) et masse grasse (%) : dernière mesure de chaque jour ; et l'objectif de poids réglé dans l'app
+        (plage, date, trajectoire, écart, cible de calories du jour) s'il existe."""
+        return run(queries.body_with_goal, start, end)
 
     @mcp.tool(annotations=READ_ONLY)
     def get_spo2(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
@@ -233,8 +234,9 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
     @mcp.tool(annotations=READ_ONLY)
     def get_nutrition(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
         """Repas notés dans Parro Health (recette, saisie libre ou photo validée) avec calories et
-        macronutriments, totaux par jour, et dépense énergétique du jour (Health Connect) quand elle existe.
-        Un jour où tous les repas ne sont pas notés sous-estime l'apport."""
+        macronutriments, totaux par jour, et dépense énergétique du jour (Health Connect) quand elle existe ;
+        objectif de poids et cible de calories du jour s'ils sont réglés. Un jour où tous les repas ne sont pas
+        notés sous-estime l'apport."""
         return run(queries.nutrition, start, end)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -353,7 +355,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     api_ranges: dict[str, Callable[..., dict[str, Any]]] = {
         "steps": queries.daily_steps, "sleep": queries.sleep, "heart_rate": queries.heart_rate,
         "hrv": queries.hrv, "recovery": queries.recovery, "stress": queries.stress,
-        "training_load": queries.training_load, "workouts": queries.workouts, "body": queries.body,
+        "training_load": queries.training_load, "workouts": queries.workouts, "body": queries.body_with_goal,
         "spo2": queries.spo2, "journal": queries.journal, "nutrition": queries.nutrition,
     }
 

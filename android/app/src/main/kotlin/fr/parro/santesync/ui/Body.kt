@@ -62,6 +62,7 @@ fun BodyDetail(refresh: Int, onLogin: () -> Unit, onBack: () -> Unit) {
                     ref?.let { r -> Muted("${signed(w.dbl("weight_kg")!! - r.dbl("weight_kg")!!, 1, " kg")} depuis le ${shortDate(r.optString("date"))}", 13.sp) }
                 }
             }
+            body.optJSONObject("weight_goal")?.let { WeightGoalCard(it, refresh) }
             ParroCard(gap = 12.dp) {
                 Segmented(BODY_PERIODS, period, { period = it }, accent = c.bodySoft)
                 if (weights.size < 2) Muted("Pas assez de pesées pour une courbe.")

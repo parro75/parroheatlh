@@ -219,6 +219,14 @@ def body(store: Store, start: date, end: date) -> dict[str, Any]:
     return {"start": start.isoformat(), "end": end.isoformat(), "days": days}
 
 
+def body_with_goal(store: Store, start: date, end: date) -> dict[str, Any]:
+    """Pesées + objectif de poids (calculé au dernier jour de la période) s'il est réglé."""
+    out = body(store, start, end)
+    if (wg := weight_goal(store, end)) is not None:
+        out["weight_goal"] = wg
+    return out
+
+
 def spo2(store: Store, start: date, end: date) -> dict[str, Any]:
     per_day: dict[str, list[float]] = defaultdict(list)
     for r in store.fetch("oxygen_saturation", start, end):
@@ -444,6 +452,81 @@ def goals(store: Store) -> dict[str, Any]:
     return g
 
 
+# ---- objectif de poids : trajectoire et cible de calories du jour ---------------------------------
+KCAL_PER_KG = 7700        # ordre de grandeur admis pour 1 kg de masse grasse
+MAX_DEFICIT_KCAL = 1000   # au-delà, le rythme demandé n'est plus raisonnable : on plafonne
+FLOOR_KCAL = 1500         # jamais de cible sous ce plancher, quel que soit le retard
+ON_TRACK_KG = 0.5         # écart à la trajectoire toléré avant « en avance » / « en retard »
+
+
+def _weight_goal_config(store: Store) -> dict[str, Any] | None:
+    rows = store.fetch("goals", date(2000, 1, 1), date(2100, 1, 1))
+    if not rows:
+        return None
+    d = rows[-1].data
+    lo, hi = d.get("weight_low"), d.get("weight_high")
+    try:
+        by, since = date.fromisoformat(str(d.get("weight_date"))), date.fromisoformat(str(d.get("weight_since")))
+    except ValueError:
+        return None
+    nums_ok = all(isinstance(v, (int, float)) and not isinstance(v, bool) and 30 <= v <= 300 for v in (lo, hi))
+    if not nums_ok or lo > hi or by <= since:
+        return None
+    return {"low_kg": float(lo), "high_kg": float(hi), "target_kg": round((lo + hi) / 2, 1),
+            "date": by.isoformat(), "since": since.isoformat()}
+
+
+def weight_goal(store: Store, day: date) -> dict[str, Any] | None:
+    """Objectif réglé dans l'app (plage de poids + date) : départ, trajectoire linéaire vers le milieu de la plage,
+    écart à la trajectoire, rythme encore nécessaire, et cible de calories du jour (dépense moyenne de la montre sur
+    14 jours moins le déficit de ce rythme, plafonné). None si aucun objectif de poids n'est réglé."""
+    g = _weight_goal_config(store)
+    if g is None:
+        return None
+    since, by, target = date.fromisoformat(g["since"]), date.fromisoformat(g["date"]), g["target_kg"]
+    # départ : la dernière pesée au plus tard le jour du réglage (60 j), sinon la première qui le suit
+    before = [x for x in body(store, since - timedelta(days=60), since)["days"] if x["weight_kg"] is not None]
+    after = [x for x in body(store, since, max(since, day))["days"] if x["weight_kg"] is not None]
+    start = before[-1] if before else (after[0] if after else None)
+    recent = [x for x in body(store, day - timedelta(days=365), day)["days"] if x["weight_kg"] is not None]
+    latest = recent[-1] if recent else None
+    g["note"] = ("trajectoire linéaire du poids de départ au milieu de la plage ; cible de calories = dépense moyenne "
+                 f"de la montre (14 j) moins le déficit du rythme restant ({KCAL_PER_KG} kcal par kg), plafonné à "
+                 f"{MAX_DEFICIT_KCAL} kcal et jamais sous {FLOOR_KCAL} kcal ; repère général, pas un avis médical")
+    if start is None or latest is None:
+        g["status"] = "en attente d'une pesée"
+        return g
+    s_day, s_kg = date.fromisoformat(start["date"]), start["weight_kg"]
+    l_day, l_kg = date.fromisoformat(latest["date"]), latest["weight_kg"]
+    span = max(1, (by - s_day).days)
+
+    def expected(at: date) -> float:
+        return s_kg + (target - s_kg) * min(1.0, max(0.0, (at - s_day).days / span))
+
+    direction = -1 if target < s_kg else 1  # perdre (le cas courant) ou prendre du poids
+    gap = round(l_kg - expected(l_day), 1)   # >0 : au-dessus de la trajectoire
+    weeks_left = max(0.0, (by - day).days / 7)
+    to_go = round(target - l_kg, 1)
+    raw_rate = to_go / weeks_left if weeks_left >= 1 else None  # kg/semaine, signé
+    rate = round(raw_rate, 2) if raw_rate is not None else None
+    g.update(start={"date": start["date"], "kg": s_kg}, latest={"date": latest["date"], "kg": l_kg},
+             expected_kg=round(expected(l_day), 1), expected_today_kg=round(expected(day), 1), gap_kg=gap,
+             to_go_kg=to_go, weeks_left=round(weeks_left, 1), rate_kg_per_week=rate,
+             in_range=g["low_kg"] <= l_kg <= g["high_kg"])
+    ahead = gap * direction  # >0 : en avance (sous la trajectoire pour une perte, au-dessus pour une prise)
+    g["status"] = ("dans la plage" if g["in_range"] else "en avance" if ahead >= ON_TRACK_KG
+                   else "en retard" if ahead <= -ON_TRACK_KG else "dans les temps")
+    burned = [r.data.get("total_kcal") for r in store.fetch("calories_daily", day - timedelta(days=14), day - timedelta(days=1))]
+    burned = [b for b in burned if isinstance(b, (int, float)) and b > 0]
+    if len(burned) >= 5:
+        tdee = mean(burned)
+        deficit = min(MAX_DEFICIT_KCAL, max(0.0, -(raw_rate or 0) * KCAL_PER_KG / 7)) if direction < 0 else 0.0
+        surplus = min(500.0, max(0.0, (raw_rate or 0) * KCAL_PER_KG / 7)) if direction > 0 else 0.0
+        g.update(burned_avg_kcal=round(tdee), deficit_kcal=round(deficit),
+                 kcal_target=int(max(FLOOR_KCAL, round((tdee - deficit + surplus) / 10) * 10)), burned_days=len(burned))
+    return g
+
+
 # ---- résumé pour l'écran d'accueil de l'app --------------------------------------------------
 
 
@@ -475,6 +558,8 @@ def today(store: Store, day: date) -> dict[str, Any]:
     if "hrv" not in out and (r := _latest(store, "energy_score", day, 60)) is not None and r.data.get("hrv_ms"):
         out["hrv"] = {"date": r.local_date, "value": r.data["hrv_ms"]}
     out["goals"] = goals(store)
+    if (wg := weight_goal(store, day)) is not None:
+        out["weight_goal"] = wg
     status = store.status()
     phone = [t for t in (store.last_ingest_from("SanteSync"), store.last_ingest_from("ParroHealth")) if t]
     out["last_phone_sync"] = max(phone) if phone else None
@@ -524,4 +609,5 @@ def nutrition(store: Store, start: date, end: date) -> dict[str, Any]:
         "note": "repas notés par l'utilisateur ; calories des recettes estimées d'après la table Ciqual (ANSES), "
                 "saisies libres et estimations par photo telles que validées. Un jour sans tous ses repas notés "
                 "sous-estime l'apport. Dépense : Health Connect (estimation de la montre).",
+        **({"weight_goal": wg} if (wg := weight_goal(store, end)) is not None else {}),
     }
