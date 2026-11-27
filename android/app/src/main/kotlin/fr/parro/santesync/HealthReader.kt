@@ -283,6 +283,9 @@ class HealthReader(private val client: HealthConnectClient) {
         if (has(HeartRateRecord::class)) metrics += setOf(
             HeartRateRecord.BPM_MIN, HeartRateRecord.BPM_AVG, HeartRateRecord.BPM_MAX, HeartRateRecord.MEASUREMENTS_COUNT,
         )
+        // Dépense du jour : face aux repas notés (bilan des calories).
+        if (has(TotalCaloriesBurnedRecord::class)) metrics += TotalCaloriesBurnedRecord.ENERGY_TOTAL
+        if (has(ActiveCaloriesBurnedRecord::class)) metrics += ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
         if (metrics.isEmpty()) return emptyList()
         val firstDay: LocalDate = from.atZone(zone).toLocalDate()
         val endExclusive: LocalDateTime = to.atZone(zone).toLocalDate().plusDays(1).atStartOfDay()
@@ -302,6 +305,14 @@ class HealthReader(private val client: HealthConnectClient) {
             g.result[StepsRecord.COUNT_TOTAL]?.let { steps ->
                 out += record("steps_daily", "steps:$day", start.toInstant(), end.toInstant(), off,
                     JSONObject().put("count", steps))
+            }
+            val total = g.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
+            val active = g.result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
+            if ((total ?: 0.0) > 0 || (active ?: 0.0) > 0) {
+                out += record("calories_daily", "cal:$day", start.toInstant(), end.toInstant(), off, JSONObject().apply {
+                    total?.let { put("total_kcal", it) }
+                    active?.let { put("active_kcal", it) }
+                })
             }
             val n = g.result[HeartRateRecord.MEASUREMENTS_COUNT] ?: 0L
             if (n > 0) {

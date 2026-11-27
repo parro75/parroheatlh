@@ -24,6 +24,8 @@ RECORD_TYPES = frozenset(
         "exercise_session",
         "journal",  # événement noté dans l'app (étiquettes + note) ; data.deleted = suppression
         "goals",  # objectifs personnels réglés dans l'app (id fixe « goals ») : sleep_min, steps
+        "meal",  # repas noté dans l'app : recette (calories Ciqual) ou saisie libre ; data.deleted = suppression
+        "calories_daily",  # dépense énergétique par jour local (Health Connect) : total_kcal, active_kcal
     }
 )
 
@@ -131,8 +133,25 @@ def _without_duplicates(rows: list[tuple[Row, float]], field: str) -> list[Row]:
 
 # Textes libres : longueur plafonnée (tronquée, pour ne jamais bloquer une synchro). Ils finissent devant
 # Claude (MCP) et le modèle local : plus court = moins de place pour une tentative d'injection de consignes.
-FREE_TEXT_MAX = {"note": 500, "title": 200}
+FREE_TEXT_MAX = {"note": 500, "title": 200, "label": 200}
 MAX_TAGS, MAX_TAG_LEN = 12, 40
+MEAL_SLOTS = frozenset({"matin", "midi", "soir", "collation"})
+MEAL_SOURCES = frozenset({"recette", "saisie", "photo"})
+MEAL_NUMBERS = {"kcal": 10000, "proteines": 1000, "glucides": 2000, "lipides": 1000, "fibres": 500,
+                "sucres": 2000, "sel": 100, "portions": 50}
+
+
+def _check_meal(data: dict[str, Any]) -> None:
+    if data.get("deleted"):
+        return
+    if data.get("slot") not in MEAL_SLOTS or data.get("source") not in MEAL_SOURCES:
+        raise RecordError("repas : slot (matin|midi|soir|collation) et source (recette|saisie|photo) attendus")
+    for k, top in MEAL_NUMBERS.items():
+        v = data.get(k)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= top):
+            raise RecordError(f"repas : {k} hors limites")
+    if data.get("kcal") is None:
+        raise RecordError("repas : kcal manquant")
 
 
 def _cap_free_text(rec_type: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -145,6 +164,10 @@ def _cap_free_text(rec_type: str, data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
             raise RecordError("journal : tags doit être une liste de textes")
         out["tags"] = [t[:MAX_TAG_LEN] for t in tags[:MAX_TAGS]]
+    if rec_type == "meal":
+        if isinstance(out.get("recipe"), str):
+            out["recipe"] = out["recipe"][:300]
+        _check_meal(out)
     return out
 
 

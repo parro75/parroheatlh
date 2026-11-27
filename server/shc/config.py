@@ -31,6 +31,7 @@ class Settings:
     device_signature: str = "optional"
     audit_retention_days: int = 365  # journal des accès (traçabilité)
     second_factor: str = "any"  # connexion : clé d'accès OU TOTP (any) | clé seulement dès qu'une existe (passkey)
+    recipes_dir: str | None = None  # collection Cooklang en lecture seule (calories des recettes), facultative
 
     @property
     def mcp_path(self) -> str:
@@ -86,6 +87,7 @@ def load() -> Settings:
         device_signature=_device_signature(),
         audit_retention_days=int(os.environ.get("AUDIT_RETENTION_DAYS", "365")),
         second_factor=_second_factor(),
+        recipes_dir=os.environ.get("RECIPES_DIR") or None,
     )
 
 

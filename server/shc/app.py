@@ -25,7 +25,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, audit, config, devices, ha, passkeys, pdf, queries, report, samsung_export, syncwatch, uploads
+from . import __version__, audit, config, devices, ha, nutrition, passkeys, pdf, queries, report, samsung_export, syncwatch, uploads
 from .auth import SCOPE, HealthOAuthProvider, OwnerAuth
 from .db import RecordError, Store
 
@@ -88,14 +88,15 @@ class AuditMiddleware:
             ip = (headers.get("x-forwarded-for") or (scope.get("client") or ("",))[0] or "").split(",")[0].strip()
             path = re.sub(r"/ingest-export/[0-9a-f]{32}", "/ingest-export/{id}", scope["path"])
             q = {k: v for k, v in parse_qsl(scope.get("query_string", b"").decode("latin-1"))
-                 if k in ("start", "end", "date", "metric", "period", "months", "limit")}
+                 if k in ("start", "end", "date", "metric", "period", "months", "limit", "q", "id")}
             detail = st.get("audit_detail") or " ".join(f"{k}={v}" for k, v in q.items())
             await run_in_threadpool(self.log.record, st.get("actor", "inconnu"), f"{scope['method']} {path}",
                                     detail, ip, status["code"])
 
 
 def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProvider,
-              reports: report.ReportStore, audit_log: "audit.AuditLog") -> MCPServer:
+              reports: report.ReportStore, audit_log: "audit.AuditLog",
+              book: "nutrition.RecipeBook | None" = None) -> MCPServer:
     mcp = MCPServer(
         name="samsung-health",
         version=__version__,
@@ -227,6 +228,23 @@ def build_mcp(store: Store, settings: config.Settings, provider: HealthOAuthProv
         return run(queries.journal, start, end)
 
     @mcp.tool(annotations=READ_ONLY)
+    def get_nutrition(start: DateArg = None, end: DateArg = None) -> dict[str, Any]:
+        """Repas notés dans Parro Health (recette, saisie libre ou photo validée) avec calories et
+        macronutriments, totaux par jour, et dépense énergétique du jour (Health Connect) quand elle existe.
+        Un jour où tous les repas ne sont pas notés sous-estime l'apport."""
+        return run(queries.nutrition, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def find_recipes(query: Annotated[str, Field(description="mot du titre ou d'un tag ; vide = toutes", max_length=80)] = ""
+                     ) -> dict[str, Any]:
+        """Recettes de la collection personnelle (Cooklang) avec calories et macronutriments PAR PORTION estimés
+        d'après la table Ciqual (ANSES). « complete: false » = un ingrédient n'a pas encore de correspondance."""
+        mcp_audit("find_recipes", f"q={query[:40]}")
+        if book is None or not book.available:
+            return {"available": False, "recipes": []}
+        return {"available": True, "source": nutrition.SOURCE, "recipes": book.list(query)}
+
+    @mcp.tool(annotations=READ_ONLY)
     def get_daily_report(day: DateArg = None) -> dict[str, Any]:
         """Bilan du jour (nuit, FC au repos, HRV, activité d'hier, SpO2) comparé aux moyennes personnelles,
         avec les signaux calculés par règles et le texte rédigé chaque matin par l'IA locale."""
@@ -265,6 +283,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     )
     reports = report.ReportStore(settings.db_path)
     watch = syncwatch.SyncWatch(settings.db_path)
+    book = nutrition.RecipeBook(settings.recipes_dir)  # calories des recettes (facultatif : RECIPES_DIR)
 
     def run_import(path: str) -> dict[str, Any]:
         res = samsung_export.run(store, path)
@@ -278,7 +297,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     provider.passkeys = passkeys.Passkeys(settings.db_path, settings.public_url)
     provider.second_factor = settings.second_factor
     exports = uploads.Uploads(settings.db_path, os.path.join(os.path.dirname(settings.db_path), "uploads"), run_import)
-    mcp = build_mcp(store, settings, provider, reports, audit_log)
+    mcp = build_mcp(store, settings, provider, reports, audit_log, book)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=bool(settings.allowed_hosts),
         allowed_hosts=settings.allowed_hosts,
@@ -331,7 +350,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         "steps": queries.daily_steps, "sleep": queries.sleep, "heart_rate": queries.heart_rate,
         "hrv": queries.hrv, "recovery": queries.recovery, "stress": queries.stress,
         "training_load": queries.training_load, "workouts": queries.workouts, "body": queries.body,
-        "spo2": queries.spo2, "journal": queries.journal,
+        "spo2": queries.spo2, "journal": queries.journal, "nutrition": queries.nutrition,
     }
 
     @app.get("/api/v1/{name}")
@@ -349,6 +368,14 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                         "entries": await run_in_threadpool(audit_log.entries, limit)}
             elif name == "today":
                 data = await run_in_threadpool(queries.today, store, today)
+            elif name == "recipes":
+                data = {"available": book.available, "source": nutrition.SOURCE,
+                        "recipes": await run_in_threadpool(book.list, q.get("q", "")[:80]) if book.available else []}
+            elif name == "recipe":
+                found = await run_in_threadpool(book.get, q.get("id", "")) if book.available else None
+                if found is None:
+                    raise HTTPException(status_code=404, detail="recette inconnue")
+                data = found
             elif name == "report":
                 d = queries.date_range(q.get("date"), q.get("date"), today)[0] if q.get("date") else today
                 f = await run_in_threadpool(report.facts, store, d)

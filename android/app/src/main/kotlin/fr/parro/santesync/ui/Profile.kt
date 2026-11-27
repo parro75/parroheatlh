@@ -226,7 +226,7 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+internal fun SectionLabel(text: String) {
     Text(text, Modifier.padding(bottom = 4.dp), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.c.muted,
         letterSpacing = 0.5.sp)
 }

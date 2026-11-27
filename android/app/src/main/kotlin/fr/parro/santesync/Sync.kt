@@ -127,6 +127,8 @@ object Sync {
         if (goalsSent) records.put(Goals.record(prefs))
         val (journal, journalIds) = Journal.pending(context)
         for (k in 0 until journal.length()) records.put(journal.get(k))
+        val (meals, mealIds) = Meals.pending(context)
+        for (k in 0 until meals.length()) records.put(meals.get(k))
         var sent = 0
         var i = 0
         while (i < records.length()) {
@@ -136,6 +138,7 @@ object Sync {
             i += CHUNK
         }
         if (journalIds.isNotEmpty()) Journal.markSent(context, journalIds)
+        if (mealIds.isNotEmpty()) Meals.markSent(context, mealIds)
         if (goalsSent) prefs.goalsPending = false
         prefs.changesToken = nextToken // seulement après un envoi réussi
         Widget.refresh(context) // résumé du serveur pour le widget (sans effet si non connecté)

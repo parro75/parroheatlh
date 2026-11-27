@@ -68,7 +68,8 @@ fun JournalScreen() {
     val labels = Journal.TAGS.toMap()
 
     Screen {
-        PageTitle("Ce qui peut jouer sur ta nuit", "Journal")
+        PageTitle("Repas et ce qui peut jouer sur ta nuit", "Journal")
+        MealsSection()
         ParroCard(gap = 14.dp) {
             CardTitle("Noter maintenant")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

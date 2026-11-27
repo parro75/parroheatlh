@@ -481,3 +481,47 @@ def today(store: Store, day: date) -> dict[str, Any]:
     imported = status["types"].get("vitals_daily") or status["types"].get("energy_score")
     out["last_export_day"] = imported["last_day"] if imported else None
     return out
+
+
+# ---- alimentation (repas notés dans l'app) et dépense du jour -----------------------------------------
+
+MEAL_NUTRIENTS = ("kcal", "proteines", "glucides", "lipides", "fibres", "sucres", "sel")
+MEAL_SLOTS = {"matin": "matin", "midi": "midi", "soir": "soir", "collation": "collation"}
+
+
+def nutrition(store: Store, start: date, end: date) -> dict[str, Any]:
+    """Repas par jour (heure locale), totaux, et dépense énergétique du jour quand Health Connect la publie."""
+    days: dict[str, dict[str, Any]] = {}
+
+    def day(d: str) -> dict[str, Any]:
+        return days.setdefault(d, {"date": d, "meals": [], "intake": dict.fromkeys(MEAL_NUTRIENTS, 0.0), "burned": None})
+
+    for r in store.fetch("meal", start, end):
+        if r.data.get("deleted"):
+            continue
+        x = day(r.local_date)
+        meal = {"id": r.id, "time": _hhmm(r.start), "slot": r.data.get("slot"), "source": r.data.get("source"),
+                **{k: r.data[k] for k in ("label", "recipe", "portions") if r.data.get(k) is not None},
+                **{k: r.data[k] for k in MEAL_NUTRIENTS if r.data.get(k) is not None}}
+        x["meals"].append(meal)
+        for k in MEAL_NUTRIENTS:
+            x["intake"][k] += r.data.get(k) or 0
+    for r in store.fetch("calories_daily", start, end):
+        x = day(r.local_date)
+        x["burned"] = {k: round(r.data[k]) for k in ("total_kcal", "active_kcal") if r.data.get(k) is not None}
+    out = []
+    for d in sorted(days):
+        x = days[d]
+        x["intake"] = {k: round(v, 1) for k, v in x["intake"].items()} if x["meals"] else None
+        if x["intake"] and x["burned"] and x["burned"].get("total_kcal"):
+            x["balance_kcal"] = round(x["intake"]["kcal"] - x["burned"]["total_kcal"])
+        out.append(x)
+    logged = [x for x in out if x["intake"]]
+    return {
+        "start": start.isoformat(), "end": end.isoformat(), "days": out,
+        "average_intake_kcal": round(mean(x["intake"]["kcal"] for x in logged)) if logged else None,
+        "days_logged": len(logged),
+        "note": "repas notés par l'utilisateur ; calories des recettes estimées d'après la table Ciqual (ANSES), "
+                "saisies libres et estimations par photo telles que validées. Un jour sans tous ses repas notés "
+                "sous-estime l'apport. Dépense : Health Connect (estimation de la montre).",
+    }

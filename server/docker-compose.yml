@@ -3,7 +3,7 @@
 services:
   shc:
     build: .
-    image: shc:0.16.0
+    image: shc:0.17.0
     container_name: shc
     restart: unless-stopped
     user: "10001:10001"
@@ -23,12 +23,15 @@ services:
       # Connexion : mot de passe + clé d'accès (passkey, clé FIDO2) OU TOTP en secours (any) ; passkey = clé seulement.
       AUTH_SECOND_FACTOR: any
       DATA_MARKER: .volume-chiffre   # retirer cette ligne si la base n'est pas sur un volume chiffré
+      # Calories des recettes (facultatif) : collection Cooklang + config/nutrition.conf, en lecture seule.
+      RECIPES_DIR: /recettes
 
     # Base SQLite HORS de /opt, dans un volume LUKS2 (deploy/volume-chiffre/) monté sur /var/lib/sante ;
     # clé jamais sur ce serveur. Volume fermé : dossier immuable + DATA_MARKER absent → refus de démarrer.
     volumes:
       - /var/lib/sante:/data
       - /var/lib/sante-run:/run/shc
+      - ${RECIPES_HOST_DIR:-/opt/cooklang/recipes}:/recettes:ro   # recettes seulement, aucune donnée de santé
 
     read_only: true
     cap_drop: [ALL]

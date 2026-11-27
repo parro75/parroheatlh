@@ -1,3 +1,3 @@
 """Connecteur Samsung Health (via Health Connect) → MCP."""
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
