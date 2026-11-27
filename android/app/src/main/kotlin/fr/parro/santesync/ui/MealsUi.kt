@@ -181,7 +181,7 @@ private fun AddMealDialog(
     val ctx = LocalContext.current
     val c = P.c
     var slot by remember { mutableStateOf(Meals.slotFor(LocalTime.now())) }
-    var mode by remember { mutableStateOf("recette") }
+    var mode by remember { mutableStateOf("recette") } // recette | photo (onglet « Estimer » : texte et/ou photos) | saisie
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<RecipeHit>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -250,24 +250,10 @@ private fun AddMealDialog(
     }
 
     val kcalFree = kcalText.replace(',', '.').toDoubleOrNull()
-    // Saisie libre sans calories : le texte part à l'IA locale (même file et mêmes barrières que les photos).
-    val estimate = mode == "saisie" && kcalText.isBlank()
     val canAdd = when (mode) {
         "recette" -> chosen != null
-        "saisie" -> if (estimate) label.trim().length >= 3 && !sending else kcalFree != null && kcalFree in 0.0..10000.0
+        "saisie" -> kcalFree != null && kcalFree in 0.0..10000.0
         else -> false
-    }
-    val sendText: () -> Unit = {
-        sending = true; error = null
-        scope.launch {
-            error = try {
-                MealPhoto.upload(ctx, emptyList(), label); null
-            } catch (e: Exception) {
-                if (e is IllegalArgumentException) e.message else "Envoi impossible : ${e.message}"
-            }
-            sending = false
-            if (error == null) onPhotoSent()
-        }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -275,15 +261,16 @@ private fun AddMealDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Segmented(Meals.SLOTS, slot, { slot = it }, accent = c.bodySoft)
-                Segmented(listOf("recette" to "Recette", "photo" to "Photo", "saisie" to "Saisie libre"), mode, { mode = it },
+                Segmented(listOf("recette" to "Recette", "photo" to "Estimer", "saisie" to "Saisie libre"), mode, { mode = it },
                     accent = c.bodySoft)
                 if (mode == "photo") {
-                    Muted("Pour un repas qui n'est PAS dans tes recettes (restaurant, plat improvisé…). L'IA locale identifie " +
-                        "le plat et sa recette type ; tu corriges avant de valider. Photos et description sont effacées du " +
-                        "serveur après l'analyse, et n'en sortent jamais.")
+                    // Une seule entrée pour l'IA : une description, des photos, ou les deux (même file, mêmes barrières).
+                    Muted("Pour un repas qui n'est PAS dans tes recettes (restaurant, plat improvisé…). Décris-le, " +
+                        "photographie-le, ou les deux : l'IA locale estime le plat et ses quantités, tu corriges avant de " +
+                        "valider. Texte et photos sont effacés du serveur après l'analyse, et n'en sortent jamais.")
                     OutlinedTextField(description, { description = MealPhoto.cleanDescription(it) },
-                        label = { Text("Description (facultatif)") },
-                        placeholder = { Text("ex. poké bowl saumon avocat, sauce soja ; j'ai laissé le riz") },
+                        label = { Text("Description") },
+                        placeholder = { Text("ex. 3 tortillas poulet, carotte râpée, fromage ; poké bowl, j'ai laissé le riz") },
                         minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
                         colors = fieldColors)
                     if (shots.isNotEmpty()) {
@@ -305,10 +292,11 @@ private fun AddMealDialog(
                         }
                     }
                     when {
-                        sending -> Muted("Envoi ${if (shots.size > 1) "des ${shots.size} photos" else "de la photo"}…", color = c.body)
+                        sending -> Muted(when (shots.size) { 0 -> "Envoi à l'analyse…"; 1 -> "Envoi de la photo…"
+                            else -> "Envoi des ${shots.size} photos…" }, color = c.body)
                         preparing > 0 -> Muted("Préparation de la photo…", color = c.body)
                         room > 0 -> {
-                            Muted(if (shots.isEmpty()) "Jusqu'à ${MealPhoto.MAX_PHOTOS} photos : plusieurs angles, ou entrée, plat et dessert."
+                            Muted(if (shots.isEmpty()) "Photos facultatives, ${MealPhoto.MAX_PHOTOS} au plus : plusieurs angles, ou entrée, plat et dessert."
                                   else "Encore $room photo${if (room > 1) "s" else ""} possible${if (room > 1) "s" else ""} pour ce repas.", 12.sp)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 PrimaryButton(if (shots.isEmpty()) "Prendre une photo" else "Autre photo",
@@ -352,38 +340,31 @@ private fun AddMealDialog(
                         TextButton(onClick = { chosen = null }) { Text("Choisir une autre recette") }
                     }
                 } else {
-                    OutlinedTextField(label, { label = MealPhoto.cleanDescription(it).take(200) }, label = { Text("Quoi ?") },
-                        placeholder = { Text("ex. 3 tortillas poulet, carotte râpée, fromage ; burger frites au resto") },
-                        minLines = 1, maxLines = 3, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = fieldColors)
+                    Muted("Tu connais les calories (étiquette, appli du resto…). Sinon : onglet Estimer.", 12.sp)
+                    OutlinedTextField(label, { label = it.take(200) }, label = { Text("Quoi ? (ex. sandwich, restaurant)") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = fieldColors)
                     OutlinedTextField(kcalText, { kcalText = it.filter { ch -> ch.isDigit() || ch == ',' || ch == '.' }.take(6) },
-                        label = { Text("Calories (kcal)") }, placeholder = { Text("vide : estimées par l'IA") }, singleLine = true,
+                        label = { Text("Calories (kcal)") }, singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = fieldColors)
-                    when {
-                        sending -> Muted("Envoi à l'analyse…", color = c.body)
-                        estimate -> Muted("Sans calories, l'IA locale estime le repas d'après ton texte (ingrédients et quantités, " +
-                            "table Ciqual) ; tu vérifies avant de valider. Le texte est effacé du serveur après l'analyse.", 12.sp)
-                    }
-                    error?.let { Muted(it, color = c.warn) }
                 }
             }
         },
         confirmButton = {
             if (mode == "photo") {
-                val ready = shots.isNotEmpty() && !sending && preparing == 0
+                // Une description d'au moins 3 caractères, ou une photo (le serveur applique la même règle).
+                val ready = (shots.isNotEmpty() || description.trim().length >= 3) && !sending && preparing == 0
                 TextButton(enabled = ready, onClick = sendPhotos) {
-                    Text(if (shots.size > 1) "Analyser les ${shots.size} photos" else "Analyser", color = if (ready) c.body else c.faint)
+                    Text(if (shots.size > 1) "Estimer (${shots.size} photos)" else "Estimer", color = if (ready) c.body else c.faint)
                 }
             } else TextButton(enabled = canAdd, onClick = {
                 val pick = chosen
-                if (estimate) {
-                    sendText()
-                } else if (mode == "recette" && pick != null) {
+                if (mode == "recette" && pick != null) {
                     onAdd(slot, "recette", pick.title, pick.id, portions, pick.perServing.mapValues { (_, x) -> x * portions })
                 } else if (kcalFree != null) {
                     onAdd(slot, "saisie", label.ifBlank { "Repas" }, null, null, mapOf("kcal" to kcalFree))
                 }
-            }) { Text(if (estimate) "Estimer" else "Ajouter", color = if (canAdd) c.body else c.faint) }
+            }) { Text("Ajouter", color = if (canAdd) c.body else c.faint) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } },
         containerColor = c.surface,
