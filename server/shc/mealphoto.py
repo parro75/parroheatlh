@@ -31,6 +31,7 @@ MAX_TRIES = 2
 MAX_INGREDIENTS, MAX_GRAMS, MAX_NAME = 25, 3000, 60
 
 
+NOTHING_FOUND = "aucun aliment reconnu : précise ce que tu as mangé (quoi, combien) et relance"
 _ERASE = "image=NULL, more_images=NULL, description=NULL"  # tout ce que l'utilisateur a envoyé disparaît avec l'analyse
 
 
@@ -206,8 +207,10 @@ def estimate(analysis: dict[str, Any], matcher: FoodMatcher) -> dict[str, Any]:
     if not isinstance(analysis, dict):
         raise PhotoError("analyse : objet attendu")
     raw = analysis.get("ingredients")
-    if not isinstance(raw, list) or not raw:
+    if not isinstance(raw, list):
         raise PhotoError("analyse : liste d'ingrédients attendue")
+    if not raw:  # message affiché tel quel dans l'app
+        raise PhotoError(NOTHING_FOUND)
     total = dict.fromkeys(NUTRIENTS, 0.0)
     out = []
     for ing in raw[:MAX_INGREDIENTS]:
@@ -225,7 +228,7 @@ def estimate(analysis: dict[str, Any], matcher: FoodMatcher) -> dict[str, Any]:
                 total[k] += grams * per100[k] / 100
         out.append(line)
     if not out:
-        raise PhotoError("analyse : aucun ingrédient exploitable")
+        raise PhotoError(NOTHING_FOUND)
     def text(k: str, n: int) -> str:  # sortie du modèle : même filtre ; un texte suspect est simplement vidé
         t = clean_text(analysis.get(k), n)
         return "" if looks_like_instruction(t) else t

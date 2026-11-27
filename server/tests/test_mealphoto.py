@@ -169,6 +169,8 @@ def test_common_foods_for_photos(tmp_path):
     assert m.match("Jambon").code == "28900" and m.match("Jambon blanc").code == "28900"  # cuit par défaut (27/11)
     assert m.match("Jambon cru").code == "28800" and m.match("Jambon de Bayonne").code == "28800"
     assert m.match("Pain de mie").code == "7200"
+    assert m.match("Biscuits").code == "24000" and m.match("Bière").code == "5001"  # pas cracker ni saucisse
+    assert m.match("Coca").code == "18063" and m.match("Coca zéro").code == "18060" and m.match("Soda").code == "18329"
 
 
 def test_text_only_meal(client, tmp_path):
@@ -192,6 +194,13 @@ def test_text_only_meal(client, tmp_path):
     q.next()
     q.complete(pid2, {"plat": "Riz", "ingredients": [{"nom": "Riz", "grammes": 100}]}, FoodMatcher(CIQ), "m")
     assert q.get(pid2)["source"] == "photo"
+    pid3 = q.add([], "collation")
+    q.next()
+    try:
+        q.complete(pid3, {"plat": "Collation", "ingredients": []}, FoodMatcher(CIQ), "m")
+        raise AssertionError("liste vide acceptée")
+    except PhotoError as exc:
+        assert "précise ce que tu as mangé" in str(exc)  # message lisible dans l'app
     # Par la route : accepté, tracé sans le texte ; une consigne déguisée reste refusée.
     r = client.post("/api/v1/meal-photo", json={"description": "burger frites au resto", "images": []}, headers=AUTH)
     assert r.status_code == 200
