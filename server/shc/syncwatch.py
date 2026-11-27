@@ -55,6 +55,34 @@ class SyncWatch:
                     "message": "Le téléphone envoie de nouveau ses données."}
         return {**out, "action": "none"}
 
+    # ---- État du téléphone transmis avec chaque envoi signé (exemption de l'optimisation de batterie) ----
+
+    def phone_state(self, battery_exempt: bool, now: datetime) -> None:
+        """Mémorise l'état déclaré par l'app. Android retire l'exemption sans prévenir (réinstallation…) :
+        sans elle, les synchros automatiques sont retenues des heures pendant la veille du téléphone."""
+        self._set("battery_exempt", "1" if battery_exempt else "0")
+        self._set("battery_seen_at", now.isoformat())
+
+    def battery_status(self) -> dict[str, Any]:
+        """« battery_alert » une fois quand l'exemption tombe, « battery_ok » une fois quand elle revient."""
+        state, alerted = self._get("battery_exempt"), self._get("battery_alerted")
+        out = {"battery_exempt": None if state is None else state == "1", "seen_at": self._get("battery_seen_at")}
+        if state == "0" and not alerted:
+            return {**out, "action": "battery_alert", "title": "Parro Health — synchro automatique freinée",
+                    "message": "Android a retiré à Parro Health l'exemption de l'optimisation de batterie : les synchros "
+                               "automatiques seront retardées de plusieurs heures quand le téléphone est en veille. "
+                               "Ouvre l'app et touche « Rétablir » sur la bannière."}
+        if state == "1" and alerted:
+            return {**out, "action": "battery_ok", "title": "Parro Health — synchro automatique rétablie",
+                    "message": "Parro Health est de nouveau exemptée de l'optimisation de batterie."}
+        return {**out, "action": "none"}
+
+    def ack_battery(self, action: str) -> None:
+        if action == "battery_alert":
+            self._set("battery_alerted", "1")
+        elif action == "battery_ok":
+            self._set("battery_alerted", None)
+
     REMINDER_DAYS = 30
     REMINDER_HOURS = range(10, 20)
 

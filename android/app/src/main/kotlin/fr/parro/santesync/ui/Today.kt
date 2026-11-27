@@ -65,7 +65,8 @@ fun asleep(n: JSONObject): Double? = n.dbl("asleep_min") ?: n.dbl("in_bed_min")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TodayScreen(refresh: Int, syncing: Boolean, onSync: () -> Unit, onLogin: () -> Unit, open: (Detail, String?) -> Unit) {
+fun TodayScreen(refresh: Int, syncing: Boolean, onSync: () -> Unit, onLogin: () -> Unit, onFixBattery: () -> Unit,
+                open: (Detail, String?) -> Unit) {
     val ctx = LocalContext.current
     val prefs = Prefs(ctx)
     val state by rememberLoad(refresh) {
@@ -87,6 +88,9 @@ fun TodayScreen(refresh: Int, syncing: Boolean, onSync: () -> Unit, onLogin: () 
     PullToRefreshBox(isRefreshing = syncing, onRefresh = onSync, modifier = Modifier.fillMaxSize()) {
         Screen {
             PageTitle(fullDate(LocalDate.now()), "Aujourd'hui") { SyncChip(syncing, prefs, onSync) }
+            // refresh suit aussi les retours dans l'app : la bannière disparaît dès l'exemption rétablie.
+            val exempt = androidx.compose.runtime.remember(refresh) { fr.parro.santesync.SyncLog.batteryExempt(ctx) }
+            if (!exempt && prefs.isConfigured) BatteryBanner(onFixBattery)
             Loaded(state, onLogin) { d -> TodayContent(d, prefs, open) }
         }
     }

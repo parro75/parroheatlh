@@ -41,3 +41,34 @@ def test_routes(client):
     r = client.get("/api/v1/report-job/sync-status", headers=JOB).json()
     assert r["last_phone_sync"] and r["action"] == "none"
     assert client.post("/api/v1/report-job/sync-status/ack", json={"action": "x"}, headers=JOB).status_code == 422
+
+
+def test_battery_alert_once_then_recovery(tmp_path):
+    w = SyncWatch(str(tmp_path / "w.db"))
+    assert w.battery_status()["action"] == "none"                        # app ancienne : rien de déclaré
+    w.phone_state(True, at(10))
+    assert w.battery_status() == {"battery_exempt": True, "seen_at": at(10).isoformat(), "action": "none"}
+    w.phone_state(False, at(11))
+    s = w.battery_status()
+    assert s["action"] == "battery_alert" and "Rétablir" in s["message"]
+    w.ack_battery("battery_alert")
+    w.phone_state(False, at(12))
+    assert w.battery_status()["action"] == "none"                        # une seule alerte
+    w.phone_state(True, at(13))
+    assert w.battery_status()["action"] == "battery_ok"
+    w.ack_battery("battery_ok")
+    assert w.battery_status()["action"] == "none"
+
+
+def test_battery_state_from_ingest(client):
+    assert client.get("/api/v1/report-job/phone-state").status_code == 401
+    ua = {**AUTH, "User-Agent": "ParroHealth/0.17.1 (Android 17; auto)"}
+    client.post("/ingest", json={"records": [], "device": {"battery_exempt": "non"}}, headers=ua)  # pas un booléen : ignoré
+    assert client.get("/api/v1/report-job/phone-state", headers=JOB).json()["battery_exempt"] is None
+    assert client.post("/ingest", json={"records": [], "device": {"battery_exempt": False}}, headers=ua).status_code == 200
+    r = client.get("/api/v1/report-job/phone-state", headers=JOB).json()
+    assert r["action"] == "battery_alert" and r["battery_exempt"] is False
+    assert any("optimisation de batterie active" in (e["detail"] or "") for e in client.app.state.audit.entries(50))
+    assert client.post("/api/v1/report-job/phone-state/ack", json={"action": "x"}, headers=JOB).status_code == 422
+    assert client.post("/api/v1/report-job/phone-state/ack", json={"action": "battery_alert"}, headers=JOB).status_code == 200
+    assert client.get("/api/v1/report-job/phone-state", headers=JOB).json()["action"] == "none"

@@ -22,6 +22,8 @@ class MorningWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         val now = LocalTime.now()
         if (!now.isBefore(START) && now.isBefore(END)) Sync.run(applicationContext, Trigger.MORNING)
+        else SyncLog.record(applicationContext, Trigger.MORNING.label, SyncLog.morningPlanned(applicationContext),
+            "hors créneau", "lancé après 11 h : passage ignoré")
         schedule(applicationContext, fromWorker = true) // enchaîné APRÈS ce passage, sans l'annuler
         return Result.success()
     }
@@ -41,12 +43,16 @@ class MorningWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         }
 
         fun schedule(context: Context, fromWorker: Boolean = false) {
+            val delay = delayFrom(LocalDateTime.now()).toMillis()
             val req = OneTimeWorkRequestBuilder<MorningWorker>()
-                .setInitialDelay(delayFrom(LocalDateTime.now()).toMillis(), TimeUnit.MILLISECONDS)
+                .setInitialDelay(delay, TimeUnit.MILLISECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                NAME, if (fromWorker) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, req)
+            val policy = if (fromWorker) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
+            // KEEP garde le passage déjà prévu : l'heure prévue notée reste la sienne.
+            if (fromWorker || SyncLog.morningPlanned(context) < System.currentTimeMillis())
+                SyncLog.setMorningPlanned(context, System.currentTimeMillis() + delay)
+            WorkManager.getInstance(context).enqueueUniqueWork(NAME, policy, req)
         }
     }
 }

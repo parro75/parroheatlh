@@ -181,6 +181,7 @@ class MainActivity : FragmentActivity() {
                 pickZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
             },
         )
+        SyncLog.checkUpdate(this) // nouvelle version : note dans le journal si l'exemption de batterie a survécu
         // Planifie les synchros (horaire + matin) à chaque ouverture : rattrape les installations existantes.
         if (Prefs(this).isConfigured) SyncWorker.schedule(this)
         val firstTab = if (Prefs(this).isConfigured) Tab.TODAY else Tab.PROFILE
@@ -241,9 +242,10 @@ class MainActivity : FragmentActivity() {
                                 Detail.BODY -> BodyDetail(key, toLogin, close)
                                 Detail.ACCESS -> fr.parro.santesync.ui.AccessLogScreen(key, toLogin, close)
                                 Detail.DIAGNOSTIC -> DiagnosticScreen(resumeTick,
-                                    onRequestExtra = { LockGuard.leaving(); requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) }, onBack = close)
+                                    onRequestExtra = { LockGuard.leaving(); requestPermissions.launch(Diagnostic.EXTRA_PERMISSIONS) },
+                                    onFixBattery = ::requestBatteryExemption, onBack = close)
                                 null -> when (Tab.entries[t]) {
-                                    Tab.TODAY -> TodayScreen(key, syncing, ::syncNow, toLogin) { dd, arg -> detailArg = arg; detail = dd }
+                                    Tab.TODAY -> TodayScreen(key, syncing, ::syncNow, toLogin, ::requestBatteryExemption) { dd, arg -> detailArg = arg; detail = dd }
                                     Tab.TRENDS -> TrendsScreen(key, toLogin)
                                     Tab.JOURNAL -> JournalScreen()
                                     Tab.PROFILE -> ProfileScreen(actions, resumeTick, syncing, ::syncNow, toLogin) { refresh++ }

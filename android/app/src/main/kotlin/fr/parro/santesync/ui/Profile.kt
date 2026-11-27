@@ -196,9 +196,11 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
             )
             if (exempt) Muted("✓ Exemptée de l'optimisation de batterie : Android ne retardera pas la synchro.")
             else {
-                Muted("Android peut retarder la synchro tant que l'app est soumise à l'optimisation de batterie.")
+                Muted("Android peut retarder la synchro tant que l'app est soumise à l'optimisation de batterie.", color = c.warn)
                 SecondaryButton("Exempter de l'optimisation de batterie", actions.requestBatteryExemption, Modifier.fillMaxWidth())
             }
+            Muted(SAMSUNG_SLEEP_SETTING, 11.sp)
+            SecondaryButton("Journal des synchros", actions.openDiagnostic, Modifier.fillMaxWidth())
         }
 
         // ---- données ----
@@ -212,7 +214,7 @@ fun ProfileScreen(actions: SettingsActions, resumeTick: Int, syncing: Boolean, o
                     actions.openHealthConnectInstall() else actions.requestHealthPermissions()
             }
             Divider()
-            NavRow("Diagnostic Health Connect", "ce que les applis publient vraiment", actions.openDiagnostic)
+            NavRow("Diagnostic", "journal des synchros, ce que les applis publient dans Health Connect", actions.openDiagnostic)
             Divider()
             NavRow("Journal des accès", "qui a lu ou écrit tes données, quand et d'où", actions.openAccessLog)
         }

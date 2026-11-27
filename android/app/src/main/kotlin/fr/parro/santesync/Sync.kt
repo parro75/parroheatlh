@@ -6,6 +6,8 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,8 +45,25 @@ object Sync {
     fun userAgent(kind: String) =
         "ParroHealth/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE}; $kind)"
 
-    suspend fun run(context: Context, trigger: Trigger): SyncResult {
+    /** Une seule synchro à la fois : à la sortie de veille, Android relâche souvent l'horaire et celle du matin ensemble. */
+    private val running = Mutex()
+    /** Une synchro automatique qui suit de près une autre synchro réussie n'apporte rien : sautée. */
+    private val MIN_GAP: Duration = Duration.ofMinutes(2)
+
+    suspend fun run(context: Context, trigger: Trigger): SyncResult = running.withLock {
+        SyncLog.checkUpdate(context)
         val prefs = Prefs(context)
+        val planned = when (trigger) {
+            Trigger.MORNING -> SyncLog.morningPlanned(context)
+            Trigger.AUTO -> SyncLog.autoPlanned(context)
+            Trigger.MANUAL -> 0L
+        }
+        if (trigger == Trigger.AUTO) SyncLog.setLastAuto(context, System.currentTimeMillis())
+        val last = prefs.lastSync
+        if (trigger != Trigger.MANUAL && last != null && Duration.between(last, Instant.now()) < MIN_GAP) {
+            SyncLog.record(context, trigger.label, planned, "sauté", "synchro réussie il y a moins de 2 min")
+            return@withLock SyncResult.Ok("sautée : synchro toute récente")
+        }
         val result = try {
             doRun(context, prefs, trigger)
         } catch (e: SecurityException) {
@@ -63,7 +82,12 @@ object Sync {
         val stamp = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .format(Instant.now().atZone(ZoneId.systemDefault()))
         prefs.lastStatus = "$stamp (${trigger.label}) — ${result.message}"
-        return result
+        SyncLog.record(context, trigger.label, planned, when (result) {
+            is SyncResult.Ok -> "ok"
+            is SyncResult.Retry -> "nouvel essai"
+            is SyncResult.Fatal -> "échec"
+        }, result.message)
+        result
     }
 
     private suspend fun doRun(context: Context, prefs: Prefs, trigger: Trigger): SyncResult {
@@ -125,7 +149,9 @@ object Sync {
     }
 
     suspend fun postRecords(prefs: Prefs, records: JSONArray, trigger: Trigger): Int = withContext(Dispatchers.IO) {
-        val body = JSONObject().put("records", records).toString().toByteArray(Charsets.UTF_8)
+        // L'état du téléphone voyage dans le corps signé : le serveur prévient si l'exemption de batterie tombe.
+        val device = JSONObject().put("battery_exempt", SyncLog.batteryExempt(prefs.context))
+        val body = JSONObject().put("records", records).put("device", device).toString().toByteArray(Charsets.UTF_8)
         val url = URL("${prefs.serverUrl}/ingest")
         val conn = url.openConnection() as HttpURLConnection
         try {

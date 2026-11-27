@@ -5,7 +5,7 @@ import androidx.core.content.edit
 import java.time.Instant
 
 /** Réglages et état de synchro, dans le stockage privé de l'appli (sauvegarde et transfert exclus). */
-class Prefs(private val context: Context) {
+class Prefs(val context: Context) {
     private val sp = context.getSharedPreferences("santesync", Context.MODE_PRIVATE)
 
     /** URL du serveur, HTTPS uniquement : une URL en clair n'est jamais utilisée, même si elle était stockée. */

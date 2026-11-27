@@ -487,6 +487,20 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         watch.ack(action, last)
         return JSONResponse({"ack": action})
 
+    @app.get("/api/v1/report-job/phone-state")
+    async def phone_state(request: Request) -> JSONResponse:
+        require_report_token(request)
+        return JSONResponse(watch.battery_status(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/report-job/phone-state/ack")
+    async def phone_state_ack(request: Request) -> JSONResponse:
+        require_report_token(request)
+        action = str((await json_body(request)).get("action", ""))
+        if action not in ("battery_alert", "battery_ok"):
+            raise HTTPException(status_code=422, detail="action battery_alert|battery_ok attendue")
+        watch.ack_battery(action)
+        return JSONResponse({"ack": action})
+
     @app.get("/api/v1/report-job/export-reminder")
     async def export_reminder(request: Request) -> JSONResponse:
         require_report_token(request)
@@ -676,6 +690,12 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         log.info("ingest: %d enregistrements", n)
         request.state.audit_detail = f"{len(records)} reçus, {n} écrits"
+        # État du téléphone (app ≥ 0.17.1), dans le corps signé : seul un booléen est retenu.
+        device = payload.get("device")
+        if isinstance(device, dict) and isinstance(device.get("battery_exempt"), bool):
+            watch.phone_state(device["battery_exempt"], syncwatch.now_utc())
+            if not device["battery_exempt"]:
+                request.state.audit_detail += ", optimisation de batterie active"
         return JSONResponse({"accepted": n})
 
     # Tout le reste (MCP, OAuth, /login) part vers l'application MCP ; un chemin inconnu = 404.

@@ -221,6 +221,12 @@ def watch(env: dict) -> int:
         http("POST", f"{base}/api/v1/report-job/sync-status/ack",
              {"action": s["action"], "last_phone_sync": s["last_phone_sync"]}, auth)
         print(f"synchro : {s['action']} relayée (âge {s['age_hours']} h)")
+    # Exemption de batterie retirée par Android : synchros automatiques retenues pendant la veille.
+    ph = http("GET", f"{base}/api/v1/report-job/phone-state", headers=auth)
+    if ph["action"] != "none":
+        notify(env, ph["title"], ph["message"])
+        http("POST", f"{base}/api/v1/report-job/phone-state/ack", {"action": ph["action"]}, auth)
+        print(f"téléphone : {ph['action']} relayé")
     weekly(env, base, auth)
     # Sécurité (journal des accès) : nouvel appareil, connexion, échecs, écriture refusée… sans donnée de santé.
     sec = http("GET", f"{base}/api/v1/report-job/security-events", headers=auth)

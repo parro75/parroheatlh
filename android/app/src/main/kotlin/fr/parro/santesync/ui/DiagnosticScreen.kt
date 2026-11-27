@@ -22,10 +22,11 @@ import androidx.health.connect.client.HealthConnectClient
 import fr.parro.santesync.Diagnostic
 
 @Composable
-fun DiagnosticScreen(tick: Int, onRequestExtra: () -> Unit, onBack: () -> Unit) {
+fun DiagnosticScreen(tick: Int, onRequestExtra: () -> Unit, onFixBattery: () -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val state by rememberLoad(tick) { Diagnostic.run(HealthConnectClient.getOrCreate(ctx)) }
     Screen {
+        SyncRunsSection(tick, onFixBattery)
         Section("Ce que Health Connect contient (30 jours)") {
             Text("Nombre d'enregistrements par type et application source. Les types de santé reproductive " +
                 "ne sont ni demandés ni lus.", style = MaterialTheme.typography.bodySmall)
