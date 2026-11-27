@@ -170,6 +170,8 @@ def test_common_foods_for_photos(tmp_path):
     assert m.match("Jambon cru").code == "28800" and m.match("Jambon de Bayonne").code == "28800"
     assert m.match("Pain de mie").code == "7200"
     assert m.match("Biscuits").code == "24000" and m.match("Bière").code == "5001"  # pas cracker ni saucisse
+    assert m.match("Bonbons").code == "31060" and m.match("Ourson en gélatine").code == "31060"  # pas gélatine sèche
+    assert m.match("Bonbon gélifié goût cola").code == "31060" and m.match("Chips").code == "4004"
     assert m.match("Coca").code == "18063" and m.match("Coca zéro").code == "18060" and m.match("Soda").code == "18329"
 
 

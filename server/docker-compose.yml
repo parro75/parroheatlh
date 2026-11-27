@@ -3,7 +3,7 @@
 services:
   shc:
     build: .
-    image: shc:0.21.2
+    image: shc:0.21.3
     container_name: shc
     restart: unless-stopped
     user: "10001:10001"
