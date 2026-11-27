@@ -213,7 +213,7 @@ private fun AddMealDialog(
             error = try {
                 MealPhoto.upload(ctx, shots, description); null
             } catch (e: Exception) {
-                "Envoi impossible : ${e.message}"
+                if (e is IllegalArgumentException) e.message else "Envoi impossible : ${e.message}"
             }
             sending = false
             if (error == null) onPhotoSent()
@@ -259,7 +259,7 @@ private fun AddMealDialog(
                     Muted("Pour un repas qui n'est PAS dans tes recettes (restaurant, plat improvisé…). L'IA locale identifie " +
                         "le plat et sa recette type ; tu corriges avant de valider. Photos et description sont effacées du " +
                         "serveur après l'analyse, et n'en sortent jamais.")
-                    OutlinedTextField(description, { description = it.take(MealPhoto.MAX_DESCRIPTION) },
+                    OutlinedTextField(description, { description = MealPhoto.cleanDescription(it) },
                         label = { Text("Description (facultatif)") },
                         placeholder = { Text("ex. poké bowl saumon avocat, sauce soja ; j'ai laissé le riz") },
                         minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),

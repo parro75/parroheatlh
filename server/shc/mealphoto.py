@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import sqlite3
+import unicodedata
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -35,11 +37,42 @@ class PhotoError(ValueError):
     pass
 
 
-def clean_description(text: Any) -> str:
-    """Description saisie : texte d'une ligne, sans caractères de contrôle, bornée."""
+# ---- Barrières contre l'injection de consignes (description saisie, et réponse du modèle) ----
+# 1. Liste blanche de caractères : lettres, chiffres, espace et une ponctuation de cuisine. Pas de < > { } [ ] ` " # \ ni
+#    de caractère invisible (largeur nulle, inversion bidi) : impossible de fermer une balise ou d'imiter un format.
+# 2. Formes compatibles repliées (NFKC) : les lettres « pleine chasse » ou stylisées ne contournent pas le filtre.
+# 3. Refus explicite d'un texte qui parle au modèle au lieu de décrire un repas, ou qui contient une adresse web.
+# Le job ajoute ses propres barrières (consignes en rôle système, balises à jeton aléatoire, sortie au schéma JSON),
+# et le serveur repasse la RÉPONSE du modèle au même filtre avant de l'afficher ou de l'enregistrer.
+_PUNCT = set(" .,;:!?'’()-/+%&°½¼¾×")
+_URL = re.compile(r"https?:|www\.|\b[a-z0-9-]+\.(?:com|fr|net|org|io|ly|me|co|info|ai|app|xyz)\b|@", re.I)
+_INSTRUCTION = re.compile(
+    r"\b(?:(?:ignor|oubli)\w*\s+(?:\w+\s+){0,2}?(?:tout|pr[ée]c[ée]d\w*|ci dessus|ci-dessus|r[eè]gles?)|instructions?|consignes?|prompts?|syst[eè]me|system|assistant|r[ée]pond\w*|r[ée]ponse|"
+    r"json|sch[ée]ma|mod[eè]les?|ia|llm|gpt|gemma|claude|d[ée]veloppeur|developer|admin\w*|jailbreak|"
+    r"pr[ée]tend\w*|fais semblant|tu es|you are|act as|r[oô]le|balises?|tags?|token|secret|mot de passe|password)\b",
+    re.I)
+
+
+def clean_text(text: Any, limit: int) -> str:
+    """Texte d'une ligne, réduit à la liste blanche, espaces resserrés, borné."""
     if not isinstance(text, str):
         return ""
-    return " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())[:MAX_DESCRIPTION]
+    text = unicodedata.normalize("NFKC", text)
+    kept = "".join(ch if (unicodedata.category(ch)[0] in "LN" or ch in _PUNCT) else " " for ch in text)
+    return " ".join(kept.split())[:limit].strip()
+
+
+def looks_like_instruction(text: str) -> bool:
+    return bool(_URL.search(text) or _INSTRUCTION.search(text))
+
+
+def clean_description(text: Any) -> str:
+    """Description saisie : nettoyée ; refusée si elle s'adresse au modèle (le message d'erreur le dit à l'app)."""
+    desc = clean_text(text, MAX_DESCRIPTION)
+    if desc and looks_like_instruction(desc):
+        raise PhotoError("description refusée : décris seulement le repas (plat, ingrédients, quantité), "
+                         "sans adresse web ni consigne adressée à l'IA")
+    return desc
 
 
 def parse_upload(body: bytes, content_type: str) -> tuple[list[bytes], str]:
@@ -169,10 +202,10 @@ def estimate(analysis: dict[str, Any], matcher: FoodMatcher) -> dict[str, Any]:
     total = dict.fromkeys(NUTRIENTS, 0.0)
     out = []
     for ing in raw[:MAX_INGREDIENTS]:
-        if not isinstance(ing, dict) or not isinstance(ing.get("nom"), str):
+        if not isinstance(ing, dict):
             continue
-        name, grams = ing["nom"].strip()[:MAX_NAME], _num(ing.get("grammes"), MAX_GRAMS)
-        if not name or grams is None:
+        name, grams = clean_text(ing.get("nom"), MAX_NAME), _num(ing.get("grammes"), MAX_GRAMS)
+        if not name or grams is None or looks_like_instruction(name):
             continue
         food = matcher.match(name)
         line: dict[str, Any] = {"nom": name, "grammes": round(grams)}
@@ -184,7 +217,10 @@ def estimate(analysis: dict[str, Any], matcher: FoodMatcher) -> dict[str, Any]:
         out.append(line)
     if not out:
         raise PhotoError("analyse : aucun ingrédient exploitable")
-    text = lambda k, n: analysis[k].strip()[:n] if isinstance(analysis.get(k), str) else ""  # noqa: E731
+    def text(k: str, n: int) -> str:  # sortie du modèle : même filtre ; un texte suspect est simplement vidé
+        t = clean_text(analysis.get(k), n)
+        return "" if looks_like_instruction(t) else t
+
     model_kcal = _num(analysis.get("kcal_estime"), 10000)
     res = {"plat": text("plat", 120) or "Repas", "portion": text("portion", 160), "ingredients": out,
            "total": {k: round(v, 1) for k, v in total.items()},

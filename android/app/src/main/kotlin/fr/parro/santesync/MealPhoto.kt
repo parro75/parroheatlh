@@ -26,6 +26,16 @@ import java.net.URL
 object MealPhoto {
     const val MAX_PHOTOS = 4
     const val MAX_DESCRIPTION = 300
+    private const val PUNCT = " .,;:!?'’()-/+%&°½¼¾×"
+
+    /**
+     * Filtre de frappe de la description : lettres, chiffres et ponctuation de cuisine seulement (pas de < > { } [ ]
+     * ` " # ni caractère invisible), sur une ligne. Le serveur applique le même filtre et refuse en plus une
+     * description qui s'adresse à l'IA (« ignore les consignes… ») ou contient une adresse web.
+     */
+    fun cleanDescription(text: String): String =
+        text.map { if (it.isLetterOrDigit() || it in PUNCT) it else ' ' }.joinToString("")
+            .replace(Regex("  +"), " ").trimStart().take(MAX_DESCRIPTION)
     private const val MAX_SIDE = 1024
     private const val PREFS = "meal_photos"
 
@@ -63,7 +73,7 @@ object MealPhoto {
     /** Envoi signé (jeton d'écriture + clé matérielle du téléphone) ; renvoie l'identifiant de l'analyse. */
     suspend fun upload(c: Context, jpegs: List<ByteArray>, description: String): String = withContext(Dispatchers.IO) {
         val images = JSONArray().apply { jpegs.take(MAX_PHOTOS).forEach { put(Base64.encodeToString(it, Base64.NO_WRAP)) } }
-        val body = JSONObject().put("description", description.trim().take(MAX_DESCRIPTION)).put("images", images)
+        val body = JSONObject().put("description", cleanDescription(description).trim()).put("images", images)
             .toString().toByteArray(Charsets.UTF_8)
         val prefs = Prefs(c)
         DeviceKey.ensurePaired(c)
@@ -83,6 +93,8 @@ object MealPhoto {
             conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            // Description refusée par le serveur : son message explique quoi corriger.
+            if (code == 422) throw IllegalArgumentException(runCatching { JSONObject(text).getString("detail") }.getOrDefault(text))
             if (code !in 200..299) throw HttpStatusException(code, text)
             JSONObject(text).getString("id").also { remember(c, it) }
         } finally {
