@@ -166,6 +166,9 @@ def test_common_foods_for_photos(tmp_path):
     assert m.match("Pâtes").code == "9810"               # pas du pâté
     assert m.match("Tranches de fromage").code == "12300"
     assert m.match("Fromage blanc").code != "12300" and m.match("Fromage frais").code != "12300"  # pas avalés
+    assert m.match("Jambon").code == "28900" and m.match("Jambon blanc").code == "28900"  # cuit par défaut (27/11)
+    assert m.match("Jambon cru").code == "28800" and m.match("Jambon de Bayonne").code == "28800"
+    assert m.match("Pain de mie").code == "7200"
 
 
 def test_text_only_meal(client, tmp_path):
