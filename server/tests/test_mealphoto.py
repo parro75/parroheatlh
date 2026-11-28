@@ -175,6 +175,11 @@ def test_common_foods_for_photos(tmp_path):
     assert m.match("Lait de vache").code == "19024"  # pas la mozzarella au lait de vache (27/11)
     assert m.match("Lait d'avoine").code == "18899" and m.match("Lait de riz").code == "18904"  # pas du lait, ni du riz au lait
     assert m.match("Lait demi-écrémé").code == "19033" and m.match("Lait de chèvre").name.startswith("Lait de chèvre")
+    for nom, code in [("fromage gruyère", "12114"), ("fromage comté", "12110"), ("fromage reblochon", "12045"),
+                      ("fromage cheddar", "12726"), ("fromage mozzarella", "19590"), ("fromage râpé", "12118"),
+                      ("crozets", "9810"), ("crozets de sarrasin", "9810"), ("reblochon", "12045")]:
+        assert m.match(nom).code == code, nom   # pas du fromage blanc ni « inconnu » (28/11)
+    assert m.match("fromage blanc").code != "12118" and m.match("fromage râpé végétal").code != "12118"
     assert m.match("Coca").code == "18063" and m.match("Coca zéro").code == "18060" and m.match("Soda").code == "18329"
 
 
